@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 const { stripEosSentinel } = await import("../../open-sse/translator/concerns/eosStrip.js");
-const { toClaudeMessageShape } = await import("../../open-sse/handlers/chatCore/nonStreamingHandler.js");
+const { toClaudeMessageShape } = await import("../../open-sse/translator/concerns/claudeShape.js");
 
 // An OpenAI-shape body as returned by a claude-transport executor (opencode/
 // big-pickle): no type:"message", choices[] present. This is what an Anthropic

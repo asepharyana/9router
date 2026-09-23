@@ -9,6 +9,13 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
+        # Build identifier = the git commit this flake was built from, so the
+        # nix store path is "-9router-<shortsha>" and a deployed build can be
+        # traced back to its exact source commit (versioning by git SHA, no
+        # package.json version bumps needed). Falls back to "dirty" when the
+        # tree isn't a clean git checkout (self.shortRev is only defined when
+        # the flake lives in a git repo with no uncommitted changes).
+        rev = self.shortRev or self.rev or "dirty";
         pkgs = import nixpkgs {
           inherit system;
           overlays = [
@@ -27,7 +34,7 @@
       in {
         packages.default = pkgs.stdenv.mkDerivation {
           pname = "9router";
-          version = "0.5.86";
+          version = rev;
           src = ./.;
 
           nativeBuildInputs = [

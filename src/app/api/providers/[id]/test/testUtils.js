@@ -19,6 +19,7 @@ import {
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
+import { decodeJwtPayload } from "@/lib/oauth/providerHelpers";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -100,6 +101,26 @@ const OAUTH_TEST_CONFIG = {
     authPrefix: "Bearer ",
   },
   "codebuddy-cn": { tokenExists: true },
+  // GUARD — DO NOT REMOVE. See AGENTS.md §4. Without this entry, Test Connection
+  // returns "Provider test not supported". codebuddy-intl access tokens are
+  // Keycloak JWTs (iss .../auth/realms/copilot); probe the realm's userinfo
+  // endpoint so a revoked/expired token is caught. Derive the realm URL from the
+  // token's `iss` claim, falling back to the known copilot realm.
+  // 200 = valid, 401 = invalid/revoked.
+  // Covered by tests/unit/codebuddy-intl-connection.test.js.
+  "codebuddy-intl": {
+    buildUrl: (token) => {
+      const iss = decodeJwtPayload(token)?.iss;
+      const base = typeof iss === "string" && iss.startsWith("https://")
+        ? iss.replace(/\/$/, "")
+        : "https://www.codebuddy.ai/auth/realms/copilot";
+      return `${base}/protocol/openid-connect/userinfo`;
+    },
+    method: "GET",
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    refreshable: true,
+  },
   kimchi: {
     url: KIMCHI_CONFIG.validationUrl || "https://api.cast.ai/v1/llm/openai/supported-providers",
     method: "GET",
@@ -111,9 +132,24 @@ const OAUTH_TEST_CONFIG = {
     },
     refreshable: false,
   },
+  freebuff: {
+    // The session endpoint doubles as the auth probe: GET never claims a
+    // session (POST would burn 1.0 unit of the daily quota). Mirrors the usage
+    // handler: 401 = bad token, 403 = region/account gate (token still valid),
+    // 404 = no session row yet (pre-join, token valid). No refresh path —
+    // when the authToken dies the user re-logs in.
+    url: "https://www.codebuff.com/api/v1/freebuff/session",
+    method: "GET",
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    extraHeaders: { Accept: "application/json", "User-Agent": "codebuff-cli/0.0.138" },
+    acceptStatuses: [403, 404],
+    softFailMessage: {
+      403: "Connected, but Freebuff is gated (403) — country blocked or account banned.",
+    },
+  },
   // Grok CLI / Grok Build — probe /v1/user (no inference quota). Headers mirror official CLI.
-  "grok-cli": {
-    url: PROVIDERS["grok-cli"]?.userUrl || "https://cli-chat-proxy.grok.com/v1/user",
+  "grok-cli": {    url: PROVIDERS["grok-cli"]?.userUrl || "https://cli-chat-proxy.grok.com/v1/user",
     method: "GET",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
@@ -247,7 +283,7 @@ async function refreshOAuthToken(connection) {
       return { accessToken: data.access_token, expiresIn: data.expires_in, refreshToken: data.refresh_token || refreshToken };
     }
 
-    if (provider === "codex" || provider === "grok-cli" || provider === "xai") {
+    if (provider === "codex" || provider === "grok-cli" || provider === "xai" || provider === "codebuddy-intl") {
       return await refreshProviderCredentials(provider, connection, console);
     }
 
@@ -849,7 +885,7 @@ export async function testSingleConnection(id) {
   const connection = await getProviderConnectionById(id);
   if (!connection) return { valid: false, error: "Connection not found", latencyMs: 0, testedAt: new Date().toISOString() };
 
-  const effectiveProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
+  const effectiveProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {}, connection.id);
 
   if (effectiveProxy.connectionProxyEnabled && effectiveProxy.connectionProxyUrl && !effectiveProxy.vercelRelayUrl) {
     const proxyResult = await testProxyUrl({ proxyUrl: effectiveProxy.connectionProxyUrl });

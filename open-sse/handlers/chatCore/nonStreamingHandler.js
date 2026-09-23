@@ -141,6 +141,22 @@ function openAICompletionToResponses(responseBody, customToolNames = null) {
 }
 
 /**
+ * Unwrap gateway envelopes around an OpenAI Chat Completions body.
+ * Some OpenAI-compatible gateways wrap the body in a `data` envelope
+ * (Cline: {data, success}) — without this, choices/usage don't resolve at
+ * top level downstream and surface as "no completion choices".
+ * Generic guard, no provider hardcode: only fires when the OpenAI body is
+ * nested under `data`. Callers decide when to apply it — the handler scopes
+ * it to providers opting in via transport.quirks.clineEnvelope.
+ */
+export function unwrapDataEnvelope(responseBody) {
+  if (responseBody && !responseBody.choices && responseBody.data?.choices) {
+    return responseBody.data;
+  }
+  return responseBody;
+}
+
+/**
  * Translate non-streaming response body from provider format → OpenAI format.
  */
 export function translateNonStreamingResponse(responseBody, targetFormat, sourceFormat, customToolNames = null) {
@@ -312,6 +328,8 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   responseBody = unwrapClineEnvelope(responseBody, provider);
 
   reqLogger.logProviderResponse(providerResponse.status, providerResponse.statusText, providerResponse.headers, responseBody);
+  // Unwrap AFTER logging (raw envelope stays in the log for forensics) but
+  // BEFORE usage extraction/translation so choices/usage resolve downstream.
   if (onRequestSuccess) {
     Promise.resolve()
       .then(onRequestSuccess)

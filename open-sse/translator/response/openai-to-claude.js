@@ -3,6 +3,7 @@ import { FORMATS } from "../formats.js";
 import { ROLE, CLAUDE_BLOCK, MODEL_FALLBACK } from "../schema/index.js";
 import { fromOpenAIFinish } from "../concerns/finishReason.js";
 import { extractReasoningText } from "../concerns/reasoning.js";
+import { stripEosSentinel } from "../concerns/eosStrip.js";
 
 // Legacy "proxy_" prefix used by older request translators. Response strips it
 // defensively so tool names from such turns resolve back (e.g. proxy_Read → Read
@@ -175,7 +176,7 @@ export function openaiToClaudeResponse(chunk, state) {
     results.push({
       type: "content_block_delta",
       index: state.textBlockIndex,
-      delta: { type: "text_delta", text: delta.content }
+      delta: { type: "text_delta", text: stripEosSentinel(delta.content) }
     });
   }
 

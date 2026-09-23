@@ -23,6 +23,20 @@ function parseToolArguments(value) {
   }
 }
 
+/**
+ * Convert an OpenAI Chat Completions body into the Claude Messages shape when
+ * the client speaks Anthropic (sourceFormat=CLAUDE) but the provider replied
+ * OpenAI JSON. This is the shape-aware guard for the non-streaming path: the
+ * needsTranslation(CLAUDE,CLAUDE) gate is false when target===source, so the
+ * raw provider body would otherwise leak to the Anthropic client with no
+ * content[] blocks and no type:"message".
+ */
+export function toClaudeMessageShape(responseBody) {
+  if (!responseBody || responseBody.type === "message") return responseBody;
+  if (responseBody?.choices) return openAICompletionToClaudeMessage(responseBody);
+  return responseBody;
+}
+
 function openAICompletionToClaudeMessage(responseBody) {
   if (!responseBody?.choices?.[0]) return responseBody;
   const choice = responseBody.choices[0];
@@ -346,9 +360,19 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, silent: true });
   if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
 
-  const translatedResponse = needsTranslation(targetFormat, sourceFormat)
+  let translatedResponse = needsTranslation(targetFormat, sourceFormat)
     ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat, customToolNames)
     : responseBody;
+  // Shape-aware guard: an Anthropic client (sourceFormat=CLAUDE) must receive a
+  // Claude message even when the provider answered in OpenAI Chat shape. The
+  // needsTranslation(CLAUDE,CLAUDE) gate above is false when target===source
+  // (both CLAUDE), so the raw provider body is returned — and a claude-transport
+  // executor replying OpenAI JSON leaks a chat.completion body to the client
+  // (observed with opencode/big-pickle: no content[], no type:"message").
+  if (sourceFormat === FORMATS.CLAUDE) {
+    translatedResponse = toClaudeMessageShape(translatedResponse);
+  }
+
   const isClaudeMessageResponse = sourceFormat === FORMATS.CLAUDE && translatedResponse?.type === "message";
   // Responses-format translation produces a `object:"response"` body with no
   // `choices`; skip the Chat-Completions-specific post-processing below for it.

@@ -15,6 +15,7 @@
  */
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
+import { stripEosSentinel } from "../concerns/eosStrip.js";
 
 function stopThinkingBlock(state, results) {
   if (!state.thinkingBlockStarted) return;
@@ -153,7 +154,7 @@ export function kiroToClaudeResponse(chunk, state) {
     results.push({
       type: "content_block_delta",
       index: state.textBlockIndex,
-      delta: { type: "text_delta", text: delta.content },
+      delta: { type: "text_delta", text: stripEosSentinel(delta.content) },
     });
   }
 

@@ -60,6 +60,9 @@
             bun install 2>&1
 
             echo "=== bun run build (next build --webpack) ==="
+            # Inline the git SHA into the client bundle so the dashboard header
+            # shows "v0.5.86 (<shortsha>)" — traceable build identity in the UI.
+            export NEXT_PUBLIC_GIT_SHA="${rev}"
             bun run build 2>&1
 
             echo "=== Build complete ==="

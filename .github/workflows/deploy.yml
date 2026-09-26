@@ -38,6 +38,8 @@ env:
   ATTIC_CACHE: 9router
   ATTIC_ENDPOINT: https://attic.asepharyana.my.id
   ATTIC_PUBLIC_KEY: 9router:afHQzD4418dtxPCchhc1EDvxLcIPvFR+DM/nCJO3h/A=
+  # Port 9router listens on (systemd unit bws-exec -> profile binary).
+  PORT: 4014
 
 jobs:
   test:
@@ -222,18 +224,22 @@ jobs:
 
           echo "Deployed: $STORE_PATH"
 
+      # Health check. /v1/models requires auth (401 without a key), so probe it
+      # from INSIDE the VPS over loopback where a key is unnecessary — and
+      # accept any HTTP response as "the server is up". A bare `curl -sf` from
+      # the runner against the public IP would 401 and retry pointlessly.
       - name: Verify service
-        env:
-          PORT: 4014
         run: |
           for i in $(seq 1 10); do
-            if curl -sf "http://$VPS_HOST:${{ env.PORT }}/v1/models" >/dev/null 2>&1; then
-              echo "::notice::9router responding on :${{ env.PORT }}/v1/models"
-              exit 0
-            fi
+            code=$(ssh "$VPS_USER@$VPS_HOST" \
+              "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:${{ env.PORT }}/v1/models || echo 000")
+            echo "attempt $i: /v1/models -> $code"
+            case "$code" in
+              200|401) echo "::notice::9router is serving on 127.0.0.1:${{ env.PORT }} (HTTP $code)"; exit 0 ;;
+            esac
             sleep 3
           done
-          echo "::warning::service did not answer /v1/models in time (it may still be booting)"
+          echo "::warning::9router did not answer /v1/models on the VPS in time"
 
   cleanup:
     name: Nix GC on VPS

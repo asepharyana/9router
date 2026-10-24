@@ -11,6 +11,7 @@ import { PROVIDER_MODELS } from "@/shared/constants/models";
 import { GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS } from "open-sse/config/runtimeConfig.js";
 import { initTranslators } from "open-sse/translator/index.js";
 import { getKeyAccessContext, enforceKeyAccessResolved } from "@/sse/services/keyAccess.js";
+import { safePipeResponseBody } from "open-sse/utils/streamHandler.js";
 
 export const dynamic = "force-dynamic";
 
@@ -516,7 +517,8 @@ function transformOpenAISSEToGeminiSSE(upstreamResponse, model) {
     // No flush() needed: Gemini SSE ends by stream close, not a sentinel
   });
 
-  return new Response(upstreamResponse.body.pipeThrough(transformStream), {
+  const pipedBody = safePipeResponseBody(upstreamResponse, transformStream, { context: "Gemini conversion pipe" });
+  return new Response(pipedBody, {
     status: 200,
     headers: {
       "Content-Type": "text/event-stream",

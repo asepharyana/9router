@@ -8,6 +8,7 @@ import {
   peekStreamForContent,
   reconstructStream,
 } from "../../open-sse/services/emptyFailover.js";
+import { pipeWithDisconnect } from "../../open-sse/utils/streamHandler.js";
 import { NO_RETRY_EMPTY_FINISH } from "../../open-sse/translator/schema/finishReasons.js";
 
 // The combo cases below build real streaming responses; keep request-detail writes off disk.
@@ -110,6 +111,15 @@ describe("combo fallback handles locked streams", () => {
     expect(tried).toEqual(["openai/m0", "openai/m1"]);
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("ok");
+  });
+
+  it("pipeWithDisconnect throws a lock error before pipeThrough on an already-locked body", async () => {
+    const controller = { signal: new AbortController().signal, startTime: Date.now(), isConnected: () => true, handleComplete: vi.fn(), handleError: vi.fn(), handleDisconnect: vi.fn(), abort: vi.fn() };
+    const body = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("data: hi\n\n")); controller.close(); } });
+    const response = new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    response.body.getReader();
+
+    await expect(() => pipeWithDisconnect(response, new TransformStream(), controller)).toThrow(/locked|stream pipe skipped/i);
   });
 });
 

@@ -8,6 +8,7 @@ import { convertResponsesApiFormat } from "../translator/formats/responsesApi.js
 import { createResponsesApiTransformStream } from "../transformer/responsesTransformer.js";
 import { convertResponsesStreamToJson } from "../transformer/streamToJsonConverter.js";
 import { SSE_HEADERS_CORS } from "../utils/sseConstants.js";
+import { safePipeResponseBody } from "../utils/streamHandler.js";
 
 /**
  * Handle /v1/responses request
@@ -82,7 +83,7 @@ export async function handleResponsesCore({ body, modelInfo, credentials, log, o
   // Case 2: Client wants streaming, got SSE - transform it
   if (clientRequestedStreaming && contentType.includes("text/event-stream")) {
     const transformStream = createResponsesApiTransformStream(null);
-    const transformedBody = response.body.pipeThrough(transformStream);
+    const transformedBody = safePipeResponseBody(response, transformStream, { context: "Responses API SSE transform" });
 
     return {
       success: true,

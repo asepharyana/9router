@@ -10,6 +10,7 @@ import { parseSSELine, formatSSE } from "../utils/streamHelpers.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
 import { SSE_DONE } from "../utils/sseConstants.js";
+import { safePipeResponseBody } from "../utils/streamHandler.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
 import crypto from "crypto";
 
@@ -231,7 +232,7 @@ export class GithubExecutor extends BaseExecutor {
     if (!response.body) {
       return { response: new Response("", { status: response.status, headers: response.headers }), url, headers, transformedBody };
     }
-    const convertedStream = response.body.pipeThrough(transformStream);
+    const convertedStream = safePipeResponseBody(response, transformStream, { context: "GitHub responses transform" });
 
     return {
       response: new Response(convertedStream, {
@@ -326,7 +327,7 @@ export class GithubExecutor extends BaseExecutor {
     if (!response.body) {
       return { response: new Response("", { status: response.status, headers: response.headers }), url, headers, transformedBody };
     }
-    const convertedStream = response.body.pipeThrough(transformStream);
+    const convertedStream = safePipeResponseBody(response, transformStream, { context: "GitHub messages transform" });
 
     return {
       response: new Response(convertedStream, {

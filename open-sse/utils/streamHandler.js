@@ -34,6 +34,8 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
   return {
     signal: abortController.signal,
     startTime,
+    provider: provider || "unknown",
+    model: model || "unknown",
 
     isConnected: () => !disconnected,
 
@@ -103,6 +105,8 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
 export function createDisconnectAwareStream(transformStream, streamController, onAbortTerminal = null) {
   const reader = transformStream.readable.getReader();
   const writer = transformStream.writable.getWriter();
+  const providerName = streamController?.provider || "unknown";
+  const modelName = streamController?.model || "unknown";
   let terminalEmitted = false;
 
   // Emit a synthesized terminal payload (e.g. Responses response.failed + [DONE]) once
@@ -118,7 +122,7 @@ export function createDisconnectAwareStream(transformStream, streamController, o
   return new ReadableStream({
     async pull(controller) {
       if (!streamController.isConnected()) {
-        dbg("STREAM", `pull skipped | disconnected=true | provider=${provider || "unknown"} | model=${model || "unknown"}`);
+        dbg("STREAM", `pull skipped | disconnected=true | provider=${providerName} | model=${modelName}`);
         emitTerminal(controller);
         controller.close();
         return;
@@ -128,7 +132,7 @@ export function createDisconnectAwareStream(transformStream, streamController, o
         const { done, value } = await reader.read();
 
         if (done) {
-          dbg("STREAM", `transform reader done | provider=${provider || "unknown"} | model=${model || "unknown"}`);
+          dbg("STREAM", `transform reader done | provider=${providerName} | model=${modelName}`);
           streamController.handleComplete();
           controller.close();
           return;
@@ -138,7 +142,7 @@ export function createDisconnectAwareStream(transformStream, streamController, o
         const wasConnected = streamController.isConnected();
         const msg0 = error?.message || "";
         const isControllerClosed = msg0.includes("already closed") || msg0.includes("Invalid state");
-        dbg("STREAM", `transform pull failed | provider=${provider || "unknown"} | model=${model || "unknown"} | connected=${wasConnected} | locked=${String(msg0).includes("locked")} | reason=${msg0}`);
+        dbg("STREAM", `transform pull failed | provider=${providerName} | model=${modelName} | connected=${wasConnected} | locked=${String(msg0).includes("locked")} | reason=${msg0}`);
         if (!isControllerClosed) streamController.handleError(error);
         reader.cancel().catch(() => {});
         writer.abort().catch(() => {});
@@ -172,7 +176,7 @@ export function createDisconnectAwareStream(transformStream, streamController, o
     },
 
     cancel(reason) {
-      dbg("STREAM", `cancelled | provider=${provider || "unknown"} | model=${model || "unknown"} | reason=${String(reason || "cancelled")}`);
+      dbg("STREAM", `cancelled | provider=${providerName} | model=${modelName} | reason=${String(reason || "cancelled")}`);
       streamController.handleDisconnect(reason || "cancelled");
       reader.cancel();
       writer.abort();
@@ -196,14 +200,45 @@ export function createDisconnectAwareStream(transformStream, streamController, o
  * @param {TransformStream} transformStream - Transform stream for SSE
  * @param {object} streamController - Stream controller from createStreamController
  */
+export function safePipeResponseBody(response, transformStream, { context = "response", onError = null } = {}) {
+  const body = response?.body;
+  const bodyLocked = !!body && typeof body.getReader === "function" && body.locked;
+
+  if (!body || bodyLocked) {
+    const reason = bodyLocked ? "upstream body already locked" : "upstream body missing";
+    const err = new TypeError(`${context} pipe skipped: ${reason}`);
+    onError?.(err);
+    throw err;
+  }
+
+  try {
+    return body.pipeThrough(transformStream);
+  } catch (error) {
+    onError?.(error);
+    throw error;
+  }
+}
+
 export function pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal = null, stallTimeoutMs = STREAM_STALL_TIMEOUT_MS) {
+  const tag = "STREAM";
+  const contentType = providerResponse?.headers?.get?.("content-type") || "unknown";
+  const body = providerResponse?.body;
+  const bodyLocked = !!body && typeof body.getReader === "function" && body.locked;
+
+  if (!body || bodyLocked) {
+    const reason = bodyLocked ? "upstream body already locked" : "upstream body missing";
+    const err = new TypeError(`stream pipe skipped: ${reason} | contentType=${contentType}`);
+    dbg(tag, `pipe skip | reason=${reason} | status=${providerResponse?.status || "unknown"} | contentType=${contentType}`);
+    streamController.handleError?.(err);
+    throw err;
+  }
+
   let stallTimer = null;
   let chunkCount = 0;
   let totalBytes = 0;
   let lastChunkAt = Date.now();
   let abortMessage = "upstream connection lost";
   const t0 = Date.now();
-  const tag = "STREAM";
   const clearStall = () => {
     if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
   };

@@ -3,6 +3,7 @@ import { PROVIDERS } from "../config/providers.js";
 import { commandCodeToOpenAIResponse } from "../translator/response/commandcode-to-openai.js";
 import { SSE_DONE } from "../utils/sseConstants.js";
 import { commandCodeThreadId, isCommandCodeThreadId } from "../utils/commandCodeSession.js";
+import { safePipeResponseBody } from "../utils/streamHandler.js";
 
 /**
  * CommandCodeExecutor - talks to https://api.commandcode.ai/alpha/generate
@@ -370,7 +371,7 @@ function wrapNdjsonAsOpenAISse(streamBody, model, originalResponse = null) {
     },
   });
 
-  const newBody = streamBody.pipeThrough(transform);
+  const newBody = safePipeResponseBody({ body: streamBody }, transform, { context: "CommandCode stream transform" });
   return new Response(newBody, {
     status: originalResponse?.status || 200,
     statusText: originalResponse?.statusText || "OK",

@@ -1,3 +1,5 @@
+import { safePipeResponseBody } from "./streamHandler.js";
+
 // Transform OpenAI SSE stream to Ollama JSON lines format
 export function transformToOllama(response, model) {
   let buffer = "";
@@ -78,7 +80,8 @@ export function transformToOllama(response, model) {
   if (!response.body) {
     return new Response("", { status: response.status, headers: { "Content-Type": "application/x-ndjson" } });
   }
-  return new Response(response.body.pipeThrough(transform), {
+  const pipedBody = safePipeResponseBody(response, transform, { context: "Ollama SSE transform" });
+  return new Response(pipedBody, {
     headers: { "Content-Type": "application/x-ndjson", "Access-Control-Allow-Origin": "*" }
   });
 }

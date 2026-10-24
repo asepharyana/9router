@@ -186,27 +186,25 @@ function wrapZedCompletionStream(response, provider, model) {
     enqueueSseObject(controller, encoder, converted);
   };
 
-  const transformed = response.body.pipeThrough(
-    new TransformStream({
-      transform(chunk, controller) {
-        buffer += decoder.decode(chunk, { stream: true });
-        let nl;
-        while ((nl = buffer.indexOf("\n")) !== -1) {
-          const line = buffer.slice(0, nl);
-          buffer = buffer.slice(nl + 1);
-          processLine(line, controller);
-        }
-      },
-      flush(controller) {
-        buffer += decoder.decode();
-        if (buffer) {
-          processLine(buffer, controller);
-          buffer = "";
-        }
-        finish(controller);
-      },
-    }),
-  );
+  const transformed = safePipeResponseBody(response, new TransformStream({
+    transform(chunk, controller) {
+      buffer += decoder.decode(chunk, { stream: true });
+      let nl;
+      while ((nl = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        processLine(line, controller);
+      }
+    },
+    flush(controller) {
+      buffer += decoder.decode();
+      if (buffer) {
+        processLine(buffer, controller);
+        buffer = "";
+      }
+      finish(controller);
+    },
+  }), { context: "Zed stream transform" });
 
   return new Response(transformed, {
     status: response.status,

@@ -4,10 +4,14 @@ import { buildErrorBody } from "./error.js";
 import { SSE_DONE } from "./sseConstants.js";
 
 const sharedEncoder = new TextEncoder();
+const MAX_SSE_LINE_LENGTH = 64 * 1024; // 64KB to prevent DoS
 
-// Parse SSE data line
+// Parse SSE data line safely
 export function parseSSELine(line, format = null) {
-  if (!line) return null;
+  if (!line || typeof line !== "string") return null;
+
+  // Prevent DoS: limit line length
+  if (line.length > MAX_SSE_LINE_LENGTH) return null;
 
   // NDJSON format (Ollama): raw JSON lines without "data:" prefix
   if (format === FORMATS.OLLAMA) {
@@ -15,7 +19,7 @@ export function parseSSELine(line, format = null) {
     if (trimmed.startsWith("{")) {
       try {
         return JSON.parse(trimmed);
-      } catch (error) {
+      } catch {
         return null;
       }
     }
@@ -25,15 +29,19 @@ export function parseSSELine(line, format = null) {
   // Standard SSE format: "data: {...}"
   if (line.charCodeAt(0) !== 100) return null; // 'd' = 100
 
+  // Basic safety: ensure line has proper format
+  if (!line.startsWith("data:")) return null;
+
   const data = line.slice(5).trim();
   if (data === "[DONE]") return { done: true };
 
+  // Skip empty payloads
+  if (!data) return null;
+
   try {
     return JSON.parse(data);
-  } catch (error) {
-    if (data.length > 0 && data.length < 1000) {
-      console.log(`[WARN] Failed to parse SSE line (${data.length} chars): ${data.substring(0, 100)}...`);
-    }
+  } catch {
+    // Silence parser errors - malformed frames should not crash the stream
     return null;
   }
 }

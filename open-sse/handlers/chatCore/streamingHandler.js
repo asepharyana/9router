@@ -12,6 +12,7 @@ import { SSE_HEADERS_CORS as SSE_HEADERS } from "../../utils/sseConstants.js";
 import { calledModelName } from "../../utils/modelAlias.js";
 import { upstreamResponseHeaders } from "../../utils/upstreamHeaders.js";
 import { applyUsageMultipliers } from "../../utils/usageTracking.js";
+import { safeJsonParse } from "../../transformer/jsonToStreamConverter.js";
 
 // Codex returns Responses API SSE → which client format to translate INTO, by request sourceFormat.
 // Gemini-family all map to ANTIGRAVITY decoder; unknown sources fall back to OPENAI.
@@ -22,6 +23,30 @@ const CODEX_SOURCE_TO_TARGET = {
   [FORMATS.GEMINI]: FORMATS.ANTIGRAVITY,
   [FORMATS.GEMINI_CLI]: FORMATS.ANTIGRAVITY,
 };
+
+// Maximum length for upstream error messages (prevent information leakage)
+const MAX_ERROR_MESSAGE_LENGTH = 500;
+
+/**
+ * Sanitize upstream error message to prevent information leakage
+ * @param {string} message - Raw error message
+ * @returns {string} Sanitized error message
+ */
+function sanitizeErrorMessage(message) {
+  if (!message || typeof message !== "string") return "Upstream error";
+
+  // Truncate to prevent DoS via extremely long error messages
+  let sanitized = message.slice(0, MAX_ERROR_MESSAGE_LENGTH);
+
+  // Redact potential sensitive patterns (API keys, tokens, paths)
+  sanitized = sanitized
+    .replace(/(?:sk|pk)_[a-zA-Z0-9]{20,}/g, "[REDACTED]")
+    .replace(/(?:api[_-]?key|token|secret)[=:\s]+[^\s"']+/gi, "$1=[REDACTED]")
+    .replace(/\/home\/[^/]+/g, "/home/[USER]")
+    .replace(/C:\\Users\\[^\\]+/gi, "C:\\Users\\[USER]");
+
+  return sanitized;
+}
 
 /**
  * Determine which SSE transform stream to use based on provider/format.
@@ -46,6 +71,7 @@ function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent,
 
 /**
  * Handle streaming response - pipe provider SSE through transform stream to client.
+ * Includes comprehensive validation and error handling for security.
  */
 export async function handleStreamingResponse({ providerResponse, provider, model, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, pxpipe, reqTag, log, credentials, requestedModel }) {
   if (onRequestSuccess) {
@@ -54,6 +80,32 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
       .catch(err => {
         console.error("[ChatCore] onRequestSuccess failed:", err?.message || err);
       });
+  }
+
+  // Validate providerResponse before processing
+  if (!providerResponse || typeof providerResponse !== "object") {
+    const err = new Error("Invalid provider response");
+    streamController?.handleError?.(err);
+    return {
+      success: false,
+      response: new Response(JSON.stringify({ error: { message: "Internal server error" } }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      }),
+    };
+  }
+
+  // Validate response headers
+  if (!providerResponse.headers || typeof providerResponse.headers.get !== "function") {
+    const err = new Error("Invalid response headers");
+    streamController?.handleError?.(err);
+    return {
+      success: false,
+      response: new Response(JSON.stringify({ error: { message: "Invalid response headers" } }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      }),
+    };
   }
 
   // When upstream returns HTML/text instead of SSE (e.g. Cloudflare 5xx error
@@ -94,9 +146,24 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
   const isResponsesPassthrough = sourceFormat === FORMATS.OPENAI_RESPONSES && targetFormat === FORMATS.OPENAI_RESPONSES;
   const onAbortTerminal = isResponsesPassthrough
     ? buildAbortedResponsesTerminalBytes
-    : (message) => buildStreamErrorBytes(HTTP_STATUS.GATEWAY_TIMEOUT, message, sourceFormat);
+    : (message) => buildStreamErrorBytes(HTTP_STATUS.GATEWAY_TIMEOUT, sanitizeErrorMessage(message), sourceFormat);
   const stallTimeoutMs = PROVIDERS[provider]?.stallTimeoutMs || STREAM_STALL_TIMEOUT_MS;
-  const transformedBody = pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal, stallTimeoutMs);
+
+  let transformedBody;
+  try {
+    transformedBody = pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal, stallTimeoutMs);
+  } catch (error) {
+    const safeMsg = sanitizeErrorMessage(error?.message || "Stream processing failed");
+    console.error(`[STREAM] pipeWithDisconnect error: ${safeMsg}`);
+    streamController?.handleError?.(error);
+    return {
+      success: false,
+      response: new Response(JSON.stringify({ error: { message: safeMsg } }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      }),
+    };
+  }
 
   saveRequestDetail(buildRequestDetail({
     provider, model, connectionId, requestedModel,

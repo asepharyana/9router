@@ -101,3 +101,17 @@ export function resolveRetryEntry(entry) {
 export const SKIP_PATTERNS = [
   "Please write a 5-10 word title for the following conversation:"
 ];
+
+// Stream size limits (bytes)
+function envBytes(name, def) {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return def;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : def;
+}
+
+// Maximum total bytes per stream request (prevent DoS)
+export const MAX_STREAM_BYTES_PER_REQUEST = envBytes("MAX_STREAM_BYTES_PER_REQUEST", 100 * 1024 * 1024); // 100MB default
+
+// Maximum JSON body size for non-streaming responses
+export const MAX_JSON_BODY_SIZE = envBytes("MAX_JSON_BODY_SIZE", 5 * 1024 * 1024); // 5MB default

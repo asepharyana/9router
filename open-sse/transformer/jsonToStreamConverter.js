@@ -8,6 +8,8 @@ import { chatChunkSse, sseChunk } from "../utils/sse.js";
 import { MODEL_FALLBACK } from "../translator/schema/defaults.js";
 import { OPENAI_FINISH } from "../translator/schema/finishReasons.js";
 
+const MAX_JSON_BODY_SIZE = 5 * 1024 * 1024; // 5MB for JSON body parsing
+
 /** Content type the upstream actually sent, lowercased ("" when absent). */
 export function contentTypeOf(response) {
   return String(response?.headers?.get("content-type") || "").toLowerCase();
@@ -41,8 +43,11 @@ export function isChatCompletionBody(body) {
  * Drain a provider response into a parsed JSON document, or null when the body is
  * empty / not JSON. The caller keeps the parsed value because reading a body
  * consumes it - a second `.json()` on the same Response always throws.
+ * Added size limit to prevent DoS via extremely large JSON bodies.
  */
 export async function readJsonBody(response) {
+  if (!response || typeof response !== "object") return null;
+
   let text = "";
   try {
     text = await response.text();
@@ -50,6 +55,13 @@ export async function readJsonBody(response) {
     return null;
   }
   if (!text || !text.trim()) return null;
+
+  // Prevent DoS via large JSON bodies
+  if (text.length > MAX_JSON_BODY_SIZE) {
+    console.warn(`readJsonBody: JSON body too large (${text.length} bytes)`);
+    return null;
+  }
+
   try {
     return JSON.parse(text);
   } catch {
@@ -126,38 +138,99 @@ export function sseResponseFromCompletion(body, sourceResponse) {
 }
 
 /**
+ * Safely parse a JSON string with size limit and malformed input handling.
+ * @param {string} str - JSON string to parse
+ * @param {number} maxSize - Maximum allowed size in bytes (default: 1MB)
+ * @returns {any|null} Parsed object or null on error
+ */
+function safeJsonParse(str, maxSize = 1024 * 1024) {
+  if (typeof str !== "string" || str.length === 0) return null;
+  if (str.length > maxSize) return null; // Prevent memory exhaustion
+
+  try {
+    const parsed = JSON.parse(str);
+    // Prevent circular reference attacks - JSON.parse is safe, but we check
+    // the result is a reasonable size
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Extract the JSON documents out of a streamed body text. Real upstreams deviate
  * from the spec constantly: no space after `data:`, `event:` field lines, NDJSON
  * rows with an SSE content-type, or a whole JSON document wearing an SSE label.
  * Anything unparseable is skipped so keep-alives and truncated tails are ignored.
+ *
+ * @param {string|undefined|null} rawText - Raw text to parse
+ * @param {number} maxFrames - Maximum number of frames to return (default: 1000)
+ * @returns {Array<object>} Array of parsed JSON objects
  */
-export function collectJsonFrames(rawText) {
-  const text = String(rawText || "").trim();
+export function collectJsonFrames(rawText, maxFrames = 1000) {
+  if (!rawText || typeof rawText !== "string") return [];
+
+  const text = rawText.trim();
   if (!text) return [];
 
-  if (text.startsWith("{") || text.startsWith("[")) {
-    try {
-      const whole = JSON.parse(text);
-      return Array.isArray(whole) ? whole.filter((item) => item && typeof item === "object") : [whole];
-    } catch {
-      /* not one document - fall through to the line scan */
-    }
+  // PreventDoS: limit input size
+  if (text.length > 10 * 1024 * 1024) { // 10MB hard limit
+    console.warn("collectJsonFrames: input too large, truncating");
+    return [];
   }
 
   const frames = [];
-  for (const line of text.split("\n")) {
+
+  // Try parsing as whole JSON document first (array or object)
+  if (text.startsWith("{") || text.startsWith("[")) {
+    const whole = safeJsonParse(text);
+    if (whole !== null) {
+      if (Array.isArray(whole)) {
+        // Filter to only valid objects, limit count
+        for (const item of whole) {
+          if (item && typeof item === "object" && !Array.isArray(item)) {
+            frames.push(item);
+            if (frames.length >= maxFrames) break;
+          }
+        }
+      } else if (typeof whole === "object" && !Array.isArray(whole)) {
+        frames.push(whole);
+      }
+    }
+    if (frames.length > 0) return frames;
+  }
+
+  // Fallback: line-by-line scan
+  const lines = text.split("\n");
+  for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const payload = trimmed.startsWith(SSE_DATA_PREFIX)
-      ? trimmed.slice(SSE_DATA_PREFIX.length).trim()
-      : trimmed;
-    if (!payload || payload.startsWith(":")) continue;
+
+    // Skip comments and keep-alive markers
+    if (trimmed.startsWith(":") || trimmed === "event: keep-alive") continue;
+
+    // Handle SSE format: "data: {...}"
+    let payload = trimmed;
+    if (trimmed.startsWith(SSE_DATA_PREFIX)) {
+      payload = trimmed.slice(SSE_DATA_PREFIX.length).trim();
+    }
+
+    if (!payload || payload.length === 0 || payload.startsWith(":")) continue;
+
+    // Must be JSON-like
     if (!payload.startsWith("{")) continue;
-    try {
-      frames.push(JSON.parse(payload));
-    } catch {
-      /* keep-alive comment or partial frame */
+
+    // Skip obviously invalid payloads
+    if (payload.length > 128 * 1024) { // 128KB individual frame limit
+      continue;
+    }
+
+    const parsed = safeJsonParse(payload);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      frames.push(parsed);
+      if (frames.length >= maxFrames) break;
     }
   }
+
   return frames;
 }

@@ -1,7 +1,10 @@
 // Stream handler with disconnect detection - shared for all providers
-import { STREAM_STALL_TIMEOUT_MS } from "../config/runtimeConfig.js";
+import { STREAM_STALL_TIMEOUT_MS, MAX_STREAM_BYTES_PER_REQUEST } from "../config/runtimeConfig.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
 import { formatClockTime } from "./timeFormat.js";
+
+const MAX_TOTAL_STREAM_BYTES = MAX_STREAM_BYTES_PER_REQUEST || 100 * 1024 * 1024; // 100MB default
+const STALL_CHECK_INTERVAL_MS = 1000; // Check stall every second
 
 // Get HH:MM:SS timestamp
 function getTimeString() {
@@ -233,33 +236,82 @@ export function safePipeResponseBody(response, transformStream, { context = "res
   }
 }
 
+/**
+ * Validate and sanitize stream response metadata
+ * @param {object} response - Response object
+ * @returns {boolean} Whether response is valid for streaming
+ */
+function isValidStreamResponse(response) {
+  if (!response || typeof response !== "object") return false;
+  if (!response.body || typeof response.body.getReader !== "function") return false;
+  if (!response.headers || typeof response.headers.get !== "function") return false;
+  return true;
+}
+
+/**
+ * Build a safe error message that doesn't leak sensitive information
+ * @param {Error|string} error - Error or error message
+ * @returns {string} Safe error message
+ */
+function buildSafeErrorMessage(error) {
+  const msg = typeof error === "string" ? error : (error?.message || "Unknown stream error");
+  // Remove any potential sensitive information (API keys, tokens, paths)
+  return msg
+    .replace(/(?:sk|pk)_[a-zA-Z0-9]{20,}/g, "[REDACTED]")
+    .replace(/Bearer\s+[^\s]+/gi, "Bearer [REDACTED]")
+    .replace(/authorization:\s*[^\s]/gi, "authorization: [REDACTED]");
+}
+
 export function pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal = null, stallTimeoutMs = STREAM_STALL_TIMEOUT_MS) {
   const tag = "STREAM";
+
+  // Validate response before processing
+  if (!isValidStreamResponse(providerResponse)) {
+    const reason = "invalid stream response";
+    const err = new TypeError(`stream pipe skipped: ${reason}`);
+    dbg(tag, `pipe skip | reason=${reason}`);
+    streamController?.handleDisconnect?.(reason);
+    return buildClosedTerminalStream(onAbortTerminal, reason);
+  }
+
   const contentType = providerResponse?.headers?.get?.("content-type") || "unknown";
   const body = providerResponse?.body;
   const bodyLocked = !!body && typeof body.getReader === "function" && body.locked;
 
-  if (!body || bodyLocked) {
-    const reason = bodyLocked ? "upstream body already locked" : "upstream body missing";
+  if (bodyLocked) {
+    const reason = "upstream body already locked";
     const err = new TypeError(`stream pipe skipped: ${reason} | contentType=${contentType}`);
     dbg(tag, `pipe skip | reason=${reason} | status=${providerResponse?.status || "unknown"} | contentType=${contentType}`);
     streamController?.handleDisconnect?.(reason);
-    return buildClosedTerminalStream(onAbortTerminal, reason || err.message);
+    return buildClosedTerminalStream(onAbortTerminal, reason);
   }
 
+  // Initialize tracking variables with safe defaults
   let stallTimer = null;
   let chunkCount = 0;
   let totalBytes = 0;
   let lastChunkAt = Date.now();
   let abortMessage = "upstream connection lost";
   const t0 = Date.now();
+  let streamErrored = false;
+
+  // Clear stall timer safely
   const clearStall = () => {
-    if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+    if (stallTimer) {
+      clearTimeout(stallTimer);
+      stallTimer = null;
+    }
   };
+
+  // Arm stall timer with validation
   const armStall = () => {
     clearStall();
+    if (streamErrored) return;
+
     stallTimer = setTimeout(() => {
       stallTimer = null;
+      if (streamErrored) return;
+
       abortMessage = "stream stall timeout";
       const detail = {
         phase: "upstream stall",
@@ -268,25 +320,47 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
         totalBytes,
         sinceLastMs: Date.now() - lastChunkAt,
         status: providerResponse?.status || "unknown",
-        contentType: providerResponse?.headers?.get?.("content-type") || "unknown",
+        contentType: contentType,
       };
-      dbg(tag, `STALL TIMEOUT ${stallTimeoutMs}ms | chunks=${chunkCount} | bytes=${totalBytes} | sinceLast=${Date.now() - lastChunkAt}ms | details=${JSON.stringify(detail)}`);
-      streamController.handleError?.(new Error(`stream stall timeout: ${JSON.stringify(detail)}`));
+      dbg(tag, `STALL TIMEOUT ${stallTimeoutMs}ms | chunks=${chunkCount} | bytes=${totalBytes} | sinceLast=${Date.now() - lastChunkAt}ms`);
+      streamController.handleError?.(new Error(`stream stall timeout: ${detail.chunks} chunks, ${detail.totalBytes} bytes`));
       streamController.abort?.();
+      streamErrored = true;
     }, stallTimeoutMs);
   };
 
+  // Cleanup function for all termination paths
+  const cleanupStream = () => {
+    clearStall();
+    streamErrored = true;
+  };
+
   // Wrap controller so every termination path clears the stall timer.
-  // Without this, abort/cancel/downstream-error paths leave the timer armed
-  // and a stale abort could fire after the request has already ended.
   const wrappedController = {
     signal: streamController.signal,
     startTime: streamController.startTime,
     isConnected: () => streamController.isConnected(),
-    handleComplete: () => { dbg(tag, `complete | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleComplete(); },
-    handleError: (e) => { dbg(tag, `error: ${e?.message} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleError(e); },
-    handleDisconnect: (r) => { dbg(tag, `disconnect: ${r} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleDisconnect(r); },
-    abort: () => { clearStall(); streamController.abort(); }
+    handleComplete: () => {
+      dbg(tag, `complete | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`);
+      cleanupStream();
+      streamController.handleComplete();
+    },
+    handleError: (e) => {
+      const safeMsg = buildSafeErrorMessage(e);
+      dbg(tag, `error: ${safeMsg} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`);
+      cleanupStream();
+      streamController.handleError(e);
+    },
+    handleDisconnect: (r) => {
+      dbg(tag, `disconnect: ${r} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`);
+      cleanupStream();
+      streamController.handleDisconnect(r);
+    },
+    abort: () => {
+      clearStall();
+      streamErrored = true;
+      streamController.abort();
+    }
   };
 
   armStall();
@@ -294,24 +368,51 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
 
   const upstreamTap = new TransformStream({
     transform(chunk, controller) {
+      if (streamErrored) return; // Stop processing if stream has errored
+
       chunkCount++;
       const sz = chunk?.byteLength || chunk?.length || 0;
+
+      // Check total bytes limit
       totalBytes += sz;
+      if (totalBytes > MAX_TOTAL_STREAM_BYTES) {
+        cleanupStream();
+        abortMessage = "stream exceeded maximum size limit";
+        streamController.handleError?.(new Error(`stream too large: ${totalBytes} bytes > ${MAX_TOTAL_STREAM_BYTES}`));
+        streamController.abort?.();
+        return;
+      }
+
       const now = Date.now();
       const gap = now - lastChunkAt;
       lastChunkAt = now;
+
+      // Log periodically for debugging
       if (isDebugEnabled && (chunkCount <= 5 || chunkCount % 20 === 0 || gap > 5000)) {
         dbg(tag, `chunk #${chunkCount} | size=${sz}B | gap=${gap}ms | total=${totalBytes}B`);
       }
+
       armStall();
       controller.enqueue(chunk);
     },
-    flush() { dbg(tag, `upstream EOF | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); }
+    flush() {
+      dbg(tag, `upstream EOF | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`);
+      cleanupStream();
+    }
   });
 
-  const transformedBody = providerResponse.body
-    .pipeThrough(upstreamTap)
-    .pipeThrough(transformStream);
+  let transformedBody;
+  try {
+    transformedBody = providerResponse.body
+      .pipeThrough(upstreamTap)
+      .pipeThrough(transformStream);
+  } catch (error) {
+    cleanupStream();
+    const safeMsg = buildSafeErrorMessage(error);
+    dbg(tag, `pipeThrough failed: ${safeMsg}`);
+    streamController?.handleError?.(error);
+    return buildClosedTerminalStream(onAbortTerminal, safeMsg);
+  }
 
   return createDisconnectAwareStream(
     { readable: transformedBody, writable: { getWriter: () => ({ abort: () => Promise.resolve() }) } },

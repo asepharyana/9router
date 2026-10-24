@@ -201,6 +201,32 @@ describe("A: tool-call bytes count as output tokens", () => {
     expect(usage.total_tokens).toBe(usage.prompt_tokens + usage.completion_tokens);
   });
 
+  it("uses separate prompt/output estimates when Kiro omits native usage", async () => {
+    const requestBody = {
+      systemPrompt: "base",
+      conversationState: {
+        history: [{ role: "user", content: "x".repeat(4000) }],
+        currentMessage: { role: "user", content: "y".repeat(2000) }
+      }
+    };
+
+    fetchMock.mockResolvedValueOnce(response([
+      frame("assistantResponseEvent", { content: "z".repeat(400) }),
+      frame("metadataEvent", { stopReason: "end_turn" }),
+      frame("contextUsageEvent", { contextUsagePercentage: 10 })
+    ]));
+
+    const body = await (await execute(new KiroExecutor(), {
+      body: requestBody
+    })).response.text();
+
+    const usage = usageFrom(body);
+    expect(usage).toBeDefined();
+    expect(usage.estimated).toBe(true);
+    expect(usage.prompt_tokens).toBeGreaterThan(usage.completion_tokens);
+    expect(usage.total_tokens).toBe(usage.prompt_tokens + usage.completion_tokens);
+  });
+
   it("still counts plain text output", async () => {
     const body = await run([
       frame("assistantResponseEvent", { content: "x".repeat(400) }),
@@ -385,8 +411,8 @@ describe("F: the terminal metadataEvent's real tokenUsage wins over the percenta
   it("still estimates from actual content when the stream carried no tokenUsage", async () => {
     // The content-based fallback stays for routes that report nothing but
     // context usage; the point is that it must be marked estimated and must not
-    // run when real counts exist. 400 bytes of content → ~100 tokens each side,
-    // NOT contextUsagePercentage * 1,000,000 / 100.
+    // run when real counts exist. The prompt side comes from the request body
+    // size, while the completion side comes from the actual output bytes.
     const usage = usageFrom(await run([
       frame("assistantResponseEvent", { content: "x".repeat(400) }),
       frame("metadataEvent", { stopReason: "END_TURN" }),
@@ -394,9 +420,9 @@ describe("F: the terminal metadataEvent's real tokenUsage wins over the percenta
     ]));
     expect(usage).toBeDefined();
     expect(usage.estimated).toBe(true);
-    expect(usage.prompt_tokens).toBe(100);
+    expect(usage.prompt_tokens).toBe(12);
     expect(usage.completion_tokens).toBe(100);
-    expect(usage.total_tokens).toBe(200);
+    expect(usage.total_tokens).toBe(112);
   });
 
   it("does not let a later estimate overwrite counts the provider sent", async () => {

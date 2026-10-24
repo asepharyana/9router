@@ -12,6 +12,7 @@ import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { STREAM_FIRST_CHUNK_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { AWS_EVENTSTREAM } from "../config/awsConstants.js";
 import { crc32, parseEventFrame } from "../utils/awsEventStream.js";
+import { estimateInputTokens } from "../utils/usageTracking.js";
 
 const KIRO_REPAIR_BUFFER_MAX_BYTES = 8 * 1024 * 1024;
 const KIRO_REPAIR_HEARTBEAT_MS = 10_000;
@@ -419,7 +420,8 @@ export class KiroExecutor extends BaseExecutor {
             maxBytes,
             ttftTimeoutMs,
             stallTimeoutMs,
-            repairEnabled
+            repairEnabled,
+            requestBody: args.body
           });
           if (abortController.signal.aborted) throw makeAbortError(abortController.signal.reason);
           controller.enqueue(bytes);
@@ -458,7 +460,7 @@ export class KiroExecutor extends BaseExecutor {
     const first = await this.readRecoverableIntegrityAttempt(
       rawResponse,
       args.model,
-      options,
+      { ...options, requestBody: args.body },
       "initial"
     );
     if (first.kind === "complete") return first.bytes;
@@ -503,7 +505,7 @@ export class KiroExecutor extends BaseExecutor {
     const second = await this.readRecoverableIntegrityAttempt(
       retry.response,
       args.model,
-      options,
+      { ...options, requestBody: args.body },
       "retry"
     );
     if (second.kind === "complete") return second.bytes;
@@ -564,6 +566,7 @@ export class KiroExecutor extends BaseExecutor {
     let diagnostics;
     const transformed = this.transformEventStreamToSSE(rawResponse, model, {
       maxToolBytes: Math.max(1, Math.floor(options.maxBytes / 2)),
+      requestBody: options.requestBody,
       onTerminalState: (value) => {
         diagnostics = value;
       }
@@ -1136,11 +1139,13 @@ export class KiroExecutor extends BaseExecutor {
       // usage, estimate from the bytes we actually saw instead of the window.
       if (!state.hasNativeUsage && state.hasContextUsage && !state.usage?.total_tokens) {
         const content = state.totalContentLength || 0;
-        const completion = content ? Math.floor(content / 4) : 0;
-        // Prompt is unknown without native metering; use the same content-derived
-        // figure so the estimate stays proportional to what actually happened,
-        // not to the model's advertised window.
-        const prompt = completion;
+        const completion = content ? Math.max(1, Math.floor(content / 4)) : 0;
+        const requestBody = options?.requestBody || {};
+        const prompt = Math.max(1, estimateInputTokens(requestBody));
+        // Native Kiro usage is absent, but the original request body is a better
+        // prompt-side estimate than reusing the output bytes. Reusing the same
+        // value for both prompt and completion created the mirrored counts seen in
+        // the production Kiro usage feed.
         state.usage = {
           ...(state.usage || {}),
           prompt_tokens: prompt,

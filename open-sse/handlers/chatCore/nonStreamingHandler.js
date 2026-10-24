@@ -3,12 +3,12 @@ import { needsTranslation } from "../../translator/index.js";
 import { openAICompletionToClaudeMessage } from "../../translator/concerns/claudeMessage.js";
 import { ollamaBodyToOpenAI } from "../../translator/response/ollama-to-openai.js";
 import { addBufferToUsage, filterUsageForFormat, applyUsageMultipliers } from "../../utils/usageTracking.js";
-import { createErrorResult } from "../../utils/error.js";
+import { createErrorResult, sanitizeErrorMessage } from "../../utils/error.js";
 import { rescueResponse } from "../../translator/concerns/toolCallRescue.js";
 import { applyJsonGuard } from "../../translator/concerns/jsonGuard.js";
 import { applyOpenAIToolBridge } from "../../translator/concerns/toolBridge.js";
 import { upstreamResponseHeaders } from "../../utils/upstreamHeaders.js";
-import { HTTP_STATUS } from "../../config/runtimeConfig.js";
+import { HTTP_STATUS, MAX_JSON_BODY_SIZE } from "../../config/runtimeConfig.js";
 import { parseSSEToOpenAIResponse } from "./sseToJsonHandler.js";
 import { unwrapClineEnvelope } from "../../shared/clineEnvelope.js";
 import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, saveUsageStats, formatDoneLine } from "./requestDetail.js";
@@ -22,6 +22,9 @@ import { reviewAndBuildSafeguardResults } from "../safeguardsBridge.js";
 import { resolveDecisionCredentials } from "../safeguardsCredentials.js";
 import { SAFEGUARD_STATUS_UNAVAILABLE } from "../../config/safeguardsConstants.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
+
+// Maximum text size for SSE parsing in non-streaming mode
+const MAX_SSE_TEXT_SIZE = 5 * 1024 * 1024; // 5MB
 
 function parseToolArguments(value) {
   if (!value) return {};
@@ -387,6 +390,21 @@ export async function attachReviewToClaudeBody({ responseBody, safeguardsPlan, l
  */
 export async function handleNonStreamingResponse({ providerResponse, provider, model, sourceFormat, targetFormat, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, requestedModel, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log, pluginResult, modelMultipliers = null, isAntiProbe = false }) {
   trackDone();
+
+  // Validate providerResponse
+  if (!providerResponse || typeof providerResponse !== "object") {
+    const err = new Error("Invalid provider response");
+    appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Internal server error");
+  }
+
+  // Validate headers
+  if (!providerResponse.headers || typeof providerResponse.headers.get !== "function") {
+    const err = new Error("Invalid response headers");
+    appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid response headers");
+  }
+
   const contentType = providerResponse.headers.get("content-type") || "";
   let responseBody;
   // Which format `responseBody` ends up in: the provider's own when it answers
@@ -394,7 +412,22 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   let responseBodyFormat = targetFormat;
 
   if (contentType.includes("text/event-stream")) {
-    const sseText = await providerResponse.text();
+    let sseText = "";
+    try {
+      sseText = await providerResponse.text();
+    } catch (err) {
+      appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+      console.error(`[ChatCore] Failed to read SSE text from ${provider}:`, err.message);
+      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Failed to read SSE response");
+    }
+
+    // Prevent DoS via extremely large SSE text
+    if (sseText.length > MAX_SSE_TEXT_SIZE) {
+      appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+      console.error(`[ChatCore] SSE text too large from ${provider}: ${sseText.length} bytes`);
+      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "SSE response too large");
+    }
+
     const parsed = parseSSEToOpenAIResponse(sseText, model);
     if (!parsed) {
       appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
@@ -404,7 +437,22 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
     responseBodyFormat = FORMATS.OPENAI;
   } else {
     try {
-      responseBody = await providerResponse.json();
+      // Use safeJsonParse to limit JSON body size
+      let bodyText = "";
+      try {
+        bodyText = await providerResponse.text();
+      } catch {
+        appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+        return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Failed to read response body");
+      }
+
+      if (bodyText.length > MAX_JSON_BODY_SIZE) {
+        appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+        console.error(`[ChatCore] JSON body too large from ${provider}: ${bodyText.length} bytes`);
+        return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "JSON response too large");
+      }
+
+      responseBody = JSON.parse(bodyText);
     } catch (err) {
       appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
       console.error(`[ChatCore] Failed to parse JSON from ${provider}:`, err.message);

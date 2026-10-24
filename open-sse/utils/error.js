@@ -1,6 +1,38 @@
 import { ERROR_TYPES, DEFAULT_ERROR_MESSAGES } from "../config/errorConfig.js";
 import { FORMATS } from "../translator/formats.js";
 
+// Maximum length for error messages to prevent DoS
+const MAX_ERROR_MESSAGE_LENGTH = 500;
+
+// Redact sensitive patterns from error messages
+function redactSensitiveInfo(message) {
+  if (!message || typeof message !== "string") return message;
+
+  return message
+    .replace(/(?:sk|pk)_[a-zA-Z0-9]{20,}/g, "[REDACTED]")
+    .replace(/(?:api[_-]?key|token|secret)[=:\s]+[^\s"']+/gi, "$1=[REDACTED]")
+    .replace(/\/home\/[^/]+/g, "/home/[USER]")
+    .replace(/C:\\Users\\[^\\]+/gi, "C:\\Users\\[USER]");
+}
+
+/**
+ * Sanitize error message for safe propagation
+ * @param {string} message - Raw error message
+ * @param {number} maxLength - Maximum output length
+ * @returns {string} Sanitized error message
+ */
+export function sanitizeErrorMessage(message, maxLength = MAX_ERROR_MESSAGE_LENGTH) {
+  if (!message || typeof message !== "string") return "An error occurred";
+
+  // Truncate to prevent DoS via extremely long error messages
+  let sanitized = message.slice(0, maxLength);
+
+  // Redact sensitive patterns
+  sanitized = redactSensitiveInfo(sanitized);
+
+  return sanitized;
+}
+
 // Anthropic's Messages API wraps every error in an event envelope:
 //   { "type": "error", "error": { "type": "...", "message": "..." } }
 // An OpenAI-shaped body ({ error: { message } }) is unparseable by the official
@@ -43,18 +75,19 @@ function anthropicErrorType(statusCode) {
  * @param {number} statusCode - HTTP status code
  * @param {string} message - Error message
  * @param {boolean} [hideError] - Whether to hide the real error message
+ * @param {number} [maxLength] - Maximum message length
  * @returns {object} Error response object
  */
-export function buildErrorBody(statusCode, message, hideError = false) {
-  const errorInfo = ERROR_TYPES[statusCode] || 
-    (statusCode >= 500 
+export function buildErrorBody(statusCode, message, hideError = false, maxLength = MAX_ERROR_MESSAGE_LENGTH) {
+  const errorInfo = ERROR_TYPES[statusCode] ||
+    (statusCode >= 500
       ? { type: "server_error", code: "internal_server_error" }
       : { type: "invalid_request_error", code: "" });
 
   const rawMessage = message || DEFAULT_ERROR_MESSAGES[statusCode] || "An error occurred";
   const finalMessage = hideError
     ? "There is an error but this error is hidden, try checking your error log."
-    : rawMessage;
+    : sanitizeErrorMessage(rawMessage, maxLength);
 
   return {
     error: {
@@ -92,8 +125,13 @@ export function errorResponse(statusCode, message, extraHeaders = null, hideErro
  * @param {number} statusCode - HTTP status code
  * @param {string} message - Error message
  * @param {boolean} [hideError] - Whether to hide error message
+ * @param {string} [clientFormat] - Client format (FORMATS.CLAUDE or other)
  */
-export async function writeStreamError(writer, statusCode, message, hideError = false) {
+export async function writeStreamError(writer, statusCode, message, hideError = false, clientFormat = null) {
+  if (!writer || typeof writer.write !== "function") {
+    throw new Error("Invalid writer provided to writeStreamError");
+  }
+
   const errorBody = buildErrorBody(statusCode, message, hideError);
   const encoder = new TextEncoder();
   const frame = clientFormat === FORMATS.CLAUDE
@@ -106,9 +144,14 @@ export async function writeStreamError(writer, statusCode, message, hideError = 
  * Parse upstream provider error response
  * @param {Response} response - Fetch response from provider
  * @param {object} [executor] - Optional executor with parseError() override for provider-specific parsing
+ * @param {number} [maxLength] - Maximum message length for safety
  * @returns {Promise<{statusCode: number, message: string, resetsAtMs?: number}>}
  */
-export async function parseUpstreamError(response, executor = null) {
+export async function parseUpstreamError(response, executor = null, maxLength = MAX_ERROR_MESSAGE_LENGTH) {
+  if (!response || typeof response !== "object") {
+    return { statusCode: 500, message: "Invalid response object" };
+  }
+
   let bodyText = "";
   try {
     bodyText = await response.text();
@@ -122,7 +165,11 @@ export async function parseUpstreamError(response, executor = null) {
       const parsed = executor.parseError(response, bodyText);
       if (parsed && typeof parsed === "object") {
         const msg = parsed.message || DEFAULT_ERROR_MESSAGES[response.status] || `Upstream error: ${response.status}`;
-        return { statusCode: parsed.status || response.status, message: msg, resetsAtMs: parsed.resetsAtMs };
+        return {
+          statusCode: parsed.status || response.status,
+          message: sanitizeErrorMessage(msg, maxLength),
+          resetsAtMs: parsed.resetsAtMs
+        };
       }
     } catch { /* fall through to default parsing */ }
   }
@@ -138,7 +185,7 @@ export async function parseUpstreamError(response, executor = null) {
   const messageStr = typeof message === "string" ? message : JSON.stringify(message);
   const finalMessage = messageStr || DEFAULT_ERROR_MESSAGES[response.status] || `Upstream error: ${response.status}`;
 
-  return { statusCode: response.status, message: finalMessage };
+  return { statusCode: response.status, message: sanitizeErrorMessage(finalMessage, maxLength) };
 }
 
 /**

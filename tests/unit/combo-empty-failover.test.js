@@ -113,13 +113,18 @@ describe("combo fallback handles locked streams", () => {
     expect(await res.text()).toBe("ok");
   });
 
-  it("pipeWithDisconnect throws a lock error before pipeThrough on an already-locked body", async () => {
+  it("pipeWithDisconnect treats an already-locked body as a graceful terminal close", async () => {
     const controller = { signal: new AbortController().signal, startTime: Date.now(), isConnected: () => true, handleComplete: vi.fn(), handleError: vi.fn(), handleDisconnect: vi.fn(), abort: vi.fn() };
     const body = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("data: hi\n\n")); controller.close(); } });
     const response = new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
     response.body.getReader();
 
-    await expect(() => pipeWithDisconnect(response, new TransformStream(), controller)).toThrow(/locked|stream pipe skipped/i);
+    expect(() => pipeWithDisconnect(response, new TransformStream(), controller)).not.toThrow();
+
+    const output = pipeWithDisconnect(response, new TransformStream(), controller);
+    const reader = output.getReader();
+    const { done } = await reader.read();
+    expect(done).toBe(true);
   });
 
   it("stops immediately when the client signal is already aborted", async () => {

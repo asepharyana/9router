@@ -200,6 +200,20 @@ export function createDisconnectAwareStream(transformStream, streamController, o
  * @param {TransformStream} transformStream - Transform stream for SSE
  * @param {object} streamController - Stream controller from createStreamController
  */
+function buildClosedTerminalStream(onAbortTerminal = null, reason = "upstream stream closed") {
+  return new ReadableStream({
+    start(controller) {
+      try {
+        if (typeof onAbortTerminal === "function") {
+          const bytes = onAbortTerminal(reason);
+          if (bytes) controller.enqueue(bytes);
+        }
+      } catch { /* terminal emission is best-effort only */ }
+      controller.close();
+    }
+  });
+}
+
 export function safePipeResponseBody(response, transformStream, { context = "response", onError = null } = {}) {
   const body = response?.body;
   const bodyLocked = !!body && typeof body.getReader === "function" && body.locked;
@@ -208,14 +222,14 @@ export function safePipeResponseBody(response, transformStream, { context = "res
     const reason = bodyLocked ? "upstream body already locked" : "upstream body missing";
     const err = new TypeError(`${context} pipe skipped: ${reason}`);
     onError?.(err);
-    throw err;
+    return buildClosedTerminalStream(null, reason);
   }
 
   try {
     return body.pipeThrough(transformStream);
   } catch (error) {
     onError?.(error);
-    throw error;
+    return buildClosedTerminalStream(null, error?.message || "stream pipe failed");
   }
 }
 
@@ -229,8 +243,8 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
     const reason = bodyLocked ? "upstream body already locked" : "upstream body missing";
     const err = new TypeError(`stream pipe skipped: ${reason} | contentType=${contentType}`);
     dbg(tag, `pipe skip | reason=${reason} | status=${providerResponse?.status || "unknown"} | contentType=${contentType}`);
-    streamController.handleError?.(err);
-    throw err;
+    streamController?.handleDisconnect?.(reason);
+    return buildClosedTerminalStream(onAbortTerminal, reason || err.message);
   }
 
   let stallTimer = null;

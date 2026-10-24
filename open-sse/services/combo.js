@@ -406,7 +406,14 @@ export async function handleComboChat({
   sessionSticky = true,
   confidenceThreshold = 0.8,
   resolveSmartChoice = null,
+  signal = null,
 }) {
+  if (signal?.aborted) {
+    return new Response(JSON.stringify({ error: { message: "Request aborted" } }), {
+      status: 499,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   let rotatedModels = models;
   let activeStickyModel = null;
 
@@ -528,6 +535,14 @@ export async function handleComboChat({
   }
 
   for (let i = 0; i < rotatedModels.length; i++) {
+    if (signal?.aborted) {
+      log.warn("COMBO", "Client disconnected before next combo member; stopping fallback");
+      return new Response(JSON.stringify({ error: { message: "Request aborted" } }), {
+        status: 499,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const modelStr = rotatedModels[i];
     log.info("COMBO", `Trying model ${i + 1}/${rotatedModels.length}: ${modelStr}`);
 
@@ -843,7 +858,14 @@ function collectPanel(calls, { minPanel, stragglerGraceMs, panelHardTimeoutMs })
  * @param {Object} [options.tuning] - Override FUSION_DEFAULTS (minPanel, grace, timeout)
  * @returns {Promise<Response>}
  */
-export async function handleFusionChat({ body, models, handleSingleModel, log, comboName, judgeModel, tuning }) {
+export async function handleFusionChat({ body, models, handleSingleModel, log, comboName, judgeModel, tuning, signal = null }) {
+  if (signal?.aborted) {
+    return new Response(JSON.stringify({ error: { message: "Request aborted" } }), {
+      status: 499,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const panel = Array.isArray(models) ? models.filter(Boolean) : [];
   if (panel.length === 0) {
     return new Response(

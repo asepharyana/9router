@@ -121,6 +121,29 @@ describe("combo fallback handles locked streams", () => {
 
     await expect(() => pipeWithDisconnect(response, new TransformStream(), controller)).toThrow(/locked|stream pipe skipped/i);
   });
+
+  it("stops immediately when the client signal is already aborted", async () => {
+    const { handleComboChat } = await import("../../open-sse/services/combo.js");
+    const controller = new AbortController();
+    controller.abort();
+    const signal = controller.signal;
+    const tried = [];
+    const result = await handleComboChat({
+      body: { messages: [{ role: "user", content: "hi" }] },
+      models: ["openai/m0", "openai/m1"],
+      signal,
+      handleSingleModel: async (_body, model) => {
+        tried.push(model);
+        return new Response("ok", { status: 200, headers: { "Content-Type": "text/plain" } });
+      },
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), line: vi.fn(), errorLine: vi.fn() },
+      comboName: "abort-regression",
+      comboStrategy: "fallback",
+    });
+
+    expect(tried).toEqual([]);
+    expect(result.status).toBe(499);
+  });
 });
 
 describe("peekStreamForContent", () => {

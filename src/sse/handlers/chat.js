@@ -185,6 +185,7 @@ export async function handleChat(request, clientRawRequest = null) {
       return handleFusionChat({
         body,
         models: comboModels,
+        signal: request?.signal,
         handleSingleModel: (b, m, isPanel) => {
           let cleanRawReq = clientRawRequest;
           if (isPanel && clientRawRequest) {
@@ -254,6 +255,12 @@ export async function handleChat(request, clientRawRequest = null) {
  * Handle single model chat request
  */
 async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, requestedModel = null) {
+  if (request?.signal?.aborted) {
+    return new Response(JSON.stringify({ error: { message: "Request aborted" } }), {
+      status: 499,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   const modelInfo = await getModelInfo(modelStr);
 
   // If provider is null, this might be a combo name - check and handle.
@@ -304,6 +311,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         return handleFusionChat({
           body,
           models: comboModels,
+          signal: request?.signal,
           handleSingleModel: (b, m, isPanel) => {
             let cleanRawReq = clientRawRequest;
             if (isPanel && clientRawRequest) {
@@ -324,6 +332,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       return handleComboChat({
         body,
         models: augmentedModels,
+        signal: request?.signal,
         handleSingleModel: withCapacityAdapterStripping(
           (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey),
           adapterAdded
@@ -456,6 +465,14 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   const fallbackDeadlineMs = Date.now() + (provider === "opencode" ? OPENCODE_FALLBACK_BUDGET_MS : GENERIC_FALLBACK_BUDGET_MS);
 
   while (true) {
+    if (request?.signal?.aborted) {
+      log.warn("CHAT", `Client disconnected before account fallback for ${provider}/${model}`);
+      return new Response(JSON.stringify({ error: { message: "Request aborted" } }), {
+        status: 499,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { requestedModel: requestedModel || model });
 
     // All accounts unavailable
@@ -505,6 +522,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       body: { ...body, model: `${provider}/${effectiveModel}` },
       modelInfo: { provider, model: effectiveModel },
       requestedModel,
+      clientSignal: request?.signal,
       modelMultipliers,
       isAntiProbe,
       hideError: Boolean(chatSettings.hideError),

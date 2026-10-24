@@ -103,6 +103,9 @@ COPY --from=builder /app/node_modules/node-machine-id ./node_modules/node-machin
 COPY --from=builder /app/node_modules/sharp ./node_modules/sharp
 COPY --from=builder /app/node_modules/@img ./node_modules/@img
 COPY --from=builder /app/node_modules/detect-libc ./node_modules/detect-libc
+# Recreate any Turbopack-hashed Sharp aliases from the real package so future
+# deploys survive a poisoned or mismatched dependency tree.
+RUN node /app/scripts/ensure-sharp-runtime-alias.mjs || true
 # Copy opencode binary from builder stage
 COPY --from=builder /usr/local/bin/opencode /usr/local/bin/opencode
 

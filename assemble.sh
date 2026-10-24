@@ -52,4 +52,9 @@ for module in sharp @img detect-libc; do
   fi
 done
 
+# Turbopack can externalize Sharp under a hashed alias such as
+# sharp-dd06f04ad66ec9e7. Recreate those aliases from the real sharp package so
+# future deploys do not depend on a manual VPS-only shim.
+node scripts/ensure-sharp-runtime-alias.mjs
+
 echo "assemble: ok"

@@ -110,6 +110,16 @@ describe("peekStreamForContent", () => {
     expect(isNoRetryFinish(p.finishReason)).toBe(true);
   });
 
+  it("already-locked body does not throw; treated as inspectable-but-non-empty fail-open", async () => {
+    const stream = sseStream([ROLE, CONTENT, EMPTY_STOP, DONE]);
+    const reader = stream.getReader();
+    const p = await peekStreamForContent(stream);
+    expect(p.outcome).toBe("content");
+    expect(p.error).toBeTruthy();
+    expect(String(p.error.message || p.error)).toContain("locked");
+    reader.releaseLock();
+  });
+
   it("deadline fail-open: slow first content → committed as content", async () => {
     // content frame delayed 200ms, deadline 30ms → must commit (not falsely fall through)
     const p = await peekStreamForContent(sseStream([ROLE, CONTENT, DONE], [0, 200]), { deadlineMs: 30 });

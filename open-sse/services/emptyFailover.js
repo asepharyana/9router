@@ -150,6 +150,13 @@ export function isNoRetryFinish(finishReason) {
 // and — if the deadline fired mid-read — the still-pending read() (`pendingRead`) so the caller
 // can resume from it WITHOUT abandoning the chunk it will deliver.
 export async function peekStreamForContent(body, { deadlineMs = EMPTY_PEEK_DEADLINE_MS } = {}) {
+  if (!body || typeof body.getReader !== "function") {
+    return { outcome: "content", timedOut: false, head: [], reader: null, pendingRead: null, finishReason: null, error: new TypeError("Body is not a readable stream") };
+  }
+  if (body.locked) {
+    return { outcome: "content", timedOut: false, head: [], reader: null, pendingRead: null, finishReason: null, error: new TypeError("ReadableStream is locked") };
+  }
+
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const headChunks = [];
@@ -201,20 +208,28 @@ export async function peekStreamForContent(body, { deadlineMs = EMPTY_PEEK_DEADL
 // only ever one outstanding reader.read() at a time.
 export function reconstructStream(head, reader, pendingRead = null) {
   let pending = pendingRead;
+  const safeReader = reader && typeof reader.read === "function" ? reader : null;
+
   return new ReadableStream({
     start(controller) {
-      for (const chunk of head) controller.enqueue(chunk);
+      for (const chunk of head || []) controller.enqueue(chunk);
+      if (!safeReader) controller.close();
     },
     async pull(controller) {
+      if (!safeReader) {
+        controller.close();
+        return;
+      }
       let result;
       if (pending) { result = await pending; pending = null; }
-      else { result = await reader.read(); }
+      else { result = await safeReader.read(); }
       const { done, value } = result;
       if (done) { controller.close(); return; }
       controller.enqueue(value);
     },
     cancel(reason) {
-      try { reader.cancel(reason); } catch { /* already closed */ }
+      if (!safeReader) return;
+      try { safeReader.cancel(reason); } catch { /* already closed */ }
     },
   });
 }

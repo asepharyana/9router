@@ -58,8 +58,8 @@ export function pruneProfileCaches(profileDir) {
   const removed = [];
   let freedBytes = 0;
   for (const relative of CACHE_DIRS) {
-    const target = join(profileDir, relative);
-    if (!existsSync(target)) continue;
+    const target = join(/*turbopackIgnore: true*/ profileDir, relative);
+    if (!existsSync(/*turbopackIgnore: true*/ target)) continue;
     const before = directorySize(target);
     try {
       rmSync(target, { recursive: true, force: true });

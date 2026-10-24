@@ -26,7 +26,7 @@ export function findOpencodeBinary() {
   for (const bin of candidates) {
     if (!bin) continue;
     try {
-      if (fs.existsSync(bin)) {
+      if (fs.existsSync(/*turbopackIgnore: true*/ bin)) {
         if (isWin && !/\.(cmd|exe|bat)$/i.test(bin)) {
           if (fs.existsSync(`${bin}.cmd`)) return `${bin}.cmd`;
           if (fs.existsSync(`${bin}.exe`)) return `${bin}.exe`;
@@ -176,7 +176,7 @@ export function executeOpencodeCli({
     }
   }
 
-  const child = spawn(
+  const child = spawn(/*turbopackIgnore: true*/ 
     executable,
     ["run", "--model", targetModel, "--format", "default", promptText],
     {

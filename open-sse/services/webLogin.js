@@ -164,7 +164,7 @@ export async function startWebLogin(providerId, profileName = "default") {
 // makes every next launch fail with "ProcessSingleton". Remove and retry once.
 function clearStaleSingletonLocks(dir) {
   for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
-    try { rmSync(join(dir, name), { force: true }); } catch { /* best-effort */ }
+    try { rmSync(join(/*turbopackIgnore: true*/ dir, name), { force: true }); } catch { /* best-effort */ }
   }
 }
 

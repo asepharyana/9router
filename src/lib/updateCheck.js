@@ -94,7 +94,7 @@ function fetchText(url) {
 function readGitRevision() {
   if (cache.gitInstall !== undefined) return Promise.resolve(cache.gitInstall ? cache.revision : null);
   return new Promise((resolve) => {
-    const repoDir = path.join(process.cwd(), ".git");
+    const repoDir = path.join(/*turbopackIgnore: true*/ process.cwd(), ".git");
     const finish = (isGit, revision) => {
       cache.gitInstall = isGit;
       cache.revision = revision;

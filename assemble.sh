@@ -42,4 +42,14 @@ cp -a package.json     .next/standalone/package.json
 rm -rf .next/standalone/node_modules/next
 cp -a node_modules/next .next/standalone/node_modules/next
 
+# sharp is imported by the image text extractor and is not always included in the
+# standalone server's traced node_modules. Keep the runtime image stack beside
+# the server for deployments that run a plain `.next/standalone` bundle.
+for module in sharp @img detect-libc; do
+  if [ -e "node_modules/$module" ]; then
+    rm -rf ".next/standalone/node_modules/$module"
+    cp -a "node_modules/$module" ".next/standalone/node_modules/$module"
+  fi
+done
+
 echo "assemble: ok"

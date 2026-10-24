@@ -97,6 +97,12 @@ COPY --from=builder /app/node_modules/next ./node_modules/next
 COPY --from=builder /app/node_modules/sql.js ./node_modules/sql.js
 # node-machine-id is createRequire-loaded at runtime; tracing omits it.
 COPY --from=builder /app/node_modules/node-machine-id ./node_modules/node-machine-id
+# Sharp and its native image helpers are required by the runtime OCR/image-text
+# extractor. They are not always left in the standalone bundle unless copied
+# explicitly, which produces the hashed `sharp-<hash>` external-module crash.
+COPY --from=builder /app/node_modules/sharp ./node_modules/sharp
+COPY --from=builder /app/node_modules/@img ./node_modules/@img
+COPY --from=builder /app/node_modules/detect-libc ./node_modules/detect-libc
 # Copy opencode binary from builder stage
 COPY --from=builder /usr/local/bin/opencode /usr/local/bin/opencode
 

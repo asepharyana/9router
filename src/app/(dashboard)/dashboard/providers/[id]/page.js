@@ -31,7 +31,7 @@ import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
 import CustomConfigCard from "./CustomConfigCard";
 import AutoPingScheduleModal from "./AutoPingScheduleModal";
 import { getScheduleSlotLabels } from "@/shared/services/quotaPingSchedule";
-import WebLoginButton, { WEB_LOGIN_PROVIDERS } from "../components/WebLoginButton.js";
+import WebLoginButton, { WEB_LOGIN_PROVIDERS } from "../components/WebLoginButton";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
 

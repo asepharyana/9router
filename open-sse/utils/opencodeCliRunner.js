@@ -26,11 +26,11 @@ export function findOpencodeBinary() {
   for (const bin of candidates) {
     if (!bin) continue;
     try {
-      if (fs.existsSync(bin)) {
+      if (fs.existsSync(/* turbopackIgnore: true */ bin)) {
         if (isWin && !/\.(cmd|exe|bat)$/i.test(bin)) {
-          if (fs.existsSync(`${bin}.cmd`)) return `${bin}.cmd`;
-          if (fs.existsSync(`${bin}.exe`)) return `${bin}.exe`;
-          if (fs.existsSync(`${bin}.bat`)) return `${bin}.bat`;
+          if (fs.existsSync(/* turbopackIgnore: true */ `${bin}.cmd`)) return `${bin}.cmd`;
+          if (fs.existsSync(/* turbopackIgnore: true */ `${bin}.exe`)) return `${bin}.exe`;
+          if (fs.existsSync(/* turbopackIgnore: true */ `${bin}.bat`)) return `${bin}.bat`;
         }
         return bin;
       }
@@ -50,14 +50,14 @@ export function findOpencodeBinary() {
 
     for (const p of lines) {
       if (isWin) {
-        if (/\.(cmd|exe|bat)$/i.test(p) && fs.existsSync(p)) return p;
-        if (fs.existsSync(`${p}.cmd`)) return `${p}.cmd`;
-        if (fs.existsSync(`${p}.exe`)) return `${p}.exe`;
-      } else if (fs.existsSync(p)) {
+        if (/\.(cmd|exe|bat)$/i.test(p) && fs.existsSync(/* turbopackIgnore: true */ p)) return p;
+        if (fs.existsSync(/* turbopackIgnore: true */ `${p}.cmd`)) return `${p}.cmd`;
+        if (fs.existsSync(/* turbopackIgnore: true */ `${p}.exe`)) return `${p}.exe`;
+      } else if (fs.existsSync(/* turbopackIgnore: true */ p)) {
         return p;
       }
     }
-    if (lines[0] && fs.existsSync(lines[0])) return lines[0];
+    if (lines[0] && fs.existsSync(/* turbopackIgnore: true */ lines[0])) return lines[0];
   } catch {
     /* ignore */
   }
@@ -160,11 +160,11 @@ export async function executeOpencodeCli({
   const isWin = process.platform === "win32";
   let executable = opencodeBin;
   if (isWin && !/\.(cmd|exe|bat)$/i.test(executable)) {
-    if (fs.existsSync(`${executable}.cmd`)) {
+    if (fs.existsSync(/* turbopackIgnore: true */ `${executable}.cmd`)) {
       executable = `${executable}.cmd`;
-    } else if (fs.existsSync(`${executable}.exe`)) {
+    } else if (fs.existsSync(/* turbopackIgnore: true */ `${executable}.exe`)) {
       executable = `${executable}.exe`;
-    } else if (fs.existsSync(`${executable}.bat`)) {
+    } else if (fs.existsSync(/* turbopackIgnore: true */ `${executable}.bat`)) {
       executable = `${executable}.bat`;
     }
   }
@@ -190,7 +190,7 @@ export async function executeOpencodeCli({
         let childProcess;
         try {
           childProcess = spawn(
-            executable,
+            /* turbopackIgnore: true */ executable,
             ["run", "--model", targetModel, "--format", "default", promptText],
             {
               cwd: process.cwd(),
@@ -255,6 +255,7 @@ export async function executeOpencodeCli({
     }
   }
 
+  const responseText = finalResult?.text ?? "";
   if (!finalResult?.success || !responseText.trim()) {
     throw new Error(`OpenCode CLI produced no output text (code: ${finalResult?.code ?? 'unknown'})`);
   }

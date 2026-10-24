@@ -118,6 +118,7 @@ export function createDisconnectAwareStream(transformStream, streamController, o
   return new ReadableStream({
     async pull(controller) {
       if (!streamController.isConnected()) {
+        dbg("STREAM", `pull skipped | disconnected=true | provider=${provider || "unknown"} | model=${model || "unknown"}`);
         emitTerminal(controller);
         controller.close();
         return;
@@ -127,6 +128,7 @@ export function createDisconnectAwareStream(transformStream, streamController, o
         const { done, value } = await reader.read();
 
         if (done) {
+          dbg("STREAM", `transform reader done | provider=${provider || "unknown"} | model=${model || "unknown"}`);
           streamController.handleComplete();
           controller.close();
           return;
@@ -134,9 +136,9 @@ export function createDisconnectAwareStream(transformStream, streamController, o
         controller.enqueue(value);
       } catch (error) {
         const wasConnected = streamController.isConnected();
-        // Controller already closed = downstream ended; not an upstream error, skip noisy log.
         const msg0 = error?.message || "";
         const isControllerClosed = msg0.includes("already closed") || msg0.includes("Invalid state");
+        dbg("STREAM", `transform pull failed | provider=${provider || "unknown"} | model=${model || "unknown"} | connected=${wasConnected} | locked=${String(msg0).includes("locked")} | reason=${msg0}`);
         if (!isControllerClosed) streamController.handleError(error);
         reader.cancel().catch(() => {});
         writer.abort().catch(() => {});
@@ -170,6 +172,7 @@ export function createDisconnectAwareStream(transformStream, streamController, o
     },
 
     cancel(reason) {
+      dbg("STREAM", `cancelled | provider=${provider || "unknown"} | model=${model || "unknown"} | reason=${String(reason || "cancelled")}`);
       streamController.handleDisconnect(reason || "cancelled");
       reader.cancel();
       writer.abort();
@@ -209,8 +212,17 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
     stallTimer = setTimeout(() => {
       stallTimer = null;
       abortMessage = "stream stall timeout";
-      dbg(tag, `STALL TIMEOUT ${stallTimeoutMs}ms | chunks=${chunkCount} | bytes=${totalBytes} | sinceLast=${Date.now() - lastChunkAt}ms`);
-      streamController.handleError?.(new Error("stream stall timeout"));
+      const detail = {
+        phase: "upstream stall",
+        stallTimeoutMs,
+        chunks: chunkCount,
+        totalBytes,
+        sinceLastMs: Date.now() - lastChunkAt,
+        status: providerResponse?.status || "unknown",
+        contentType: providerResponse?.headers?.get?.("content-type") || "unknown",
+      };
+      dbg(tag, `STALL TIMEOUT ${stallTimeoutMs}ms | chunks=${chunkCount} | bytes=${totalBytes} | sinceLast=${Date.now() - lastChunkAt}ms | details=${JSON.stringify(detail)}`);
+      streamController.handleError?.(new Error(`stream stall timeout: ${JSON.stringify(detail)}`));
       streamController.abort?.();
     }, stallTimeoutMs);
   };

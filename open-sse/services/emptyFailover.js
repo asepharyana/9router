@@ -151,10 +151,25 @@ export function isNoRetryFinish(finishReason) {
 // can resume from it WITHOUT abandoning the chunk it will deliver.
 export async function peekStreamForContent(body, { deadlineMs = EMPTY_PEEK_DEADLINE_MS } = {}) {
   if (!body || typeof body.getReader !== "function") {
-    return { outcome: "content", timedOut: false, head: [], reader: null, pendingRead: null, finishReason: null, error: new TypeError("Body is not a readable stream") };
+    const err = new TypeError("Body is not a readable stream");
+    console.warn("[COMBO/peekStreamForContent] non-stream body encountered", {
+      hasBody: !!body,
+      hasReader: !!(body && typeof body.getReader === "function"),
+      locked: !!body?.locked,
+      error: err.message,
+      stack: err.stack,
+    });
+    return { outcome: "content", timedOut: false, head: [], reader: null, pendingRead: null, finishReason: null, error: err };
   }
   if (body.locked) {
-    return { outcome: "content", timedOut: false, head: [], reader: null, pendingRead: null, finishReason: null, error: new TypeError("ReadableStream is locked") };
+    const err = new TypeError("ReadableStream is locked");
+    console.warn("[COMBO/peekStreamForContent] locked stream encountered before peek", {
+      locked: true,
+      bodyType: body?.constructor?.name || typeof body,
+      error: err.message,
+      stack: err.stack,
+    });
+    return { outcome: "content", timedOut: false, head: [], reader: null, pendingRead: null, finishReason: null, error: err };
   }
 
   const reader = body.getReader();

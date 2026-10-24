@@ -22,6 +22,16 @@ async function peekComboResponse(result, log) {
   const ct = (result.headers.get("content-type") || "").toLowerCase();
   if (!result.body || !ct.includes("text/event-stream")) return null;
   const peeked = await peekStreamForContent(result.body);
+  if (peeked?.error) {
+    log?.warn?.("COMBO", "peekStreamForContent could not inspect SSE body", {
+      stage: "peekStreamForContent",
+      status: result.status,
+      bodyLocked: !!result.body?.locked,
+      hasReader: typeof result.body?.getReader === "function",
+      error: peeked.error?.message || String(peeked.error),
+      stack: peeked.error?.stack,
+    });
+  }
   const response = new Response(reconstructStream(peeked.head, peeked.reader, peeked.pendingRead), {
     status: result.status,
     statusText: result.statusText,
@@ -617,13 +627,22 @@ export async function handleComboChat({
       // Catch unexpected exceptions to ensure fallback continues. Stream-lock
       // races are retryable: the candidate already consumed/locked its body and
       // the next model is allowed to try. Do not treat this as a terminal model error.
+      const locked = isLockedStreamError(error);
       if (comboStrategy === "smart" && sessionId && modelStr === activeStickyModel) {
         clearStickyComboSession(comboName, sessionId);
       }
       lastError = error?.message || String(error);
       if (!lastStatus) lastStatus = 500;
-      if (isLockedStreamError(error)) {
-        log.warn("COMBO", `Model ${modelStr} stream was already locked, trying next`, { error: lastError });
+      log.warn("COMBO", `Model ${modelStr} threw error during combo attempt`, {
+        phase: "handleSingleModel",
+        model: modelStr,
+        lockedStream: locked,
+        error: lastError,
+        name: error?.name || "Error",
+        stack: error?.stack ? String(error.stack).split("\n").slice(0, 4).join(" | ") : null,
+      });
+      if (locked) {
+        log.warn("COMBO", `Model ${modelStr} stream was already locked, trying next`, { model: modelStr, error: lastError, lockedStream: true });
         continue;
       }
       log.warn("COMBO", `Model ${modelStr} threw error, trying next`, { error: lastError });

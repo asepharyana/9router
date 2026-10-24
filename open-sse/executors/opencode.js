@@ -162,30 +162,14 @@ if (stableSessionCleanup.unref) stableSessionCleanup.unref();
 
 function identityKey(credentials) {
   const connectionId = credentials?.connectionId || credentials?.id;
-  const poolId = credentials?.providerSpecificData?.connectionProxyPoolId || credentials?.proxyPoolId || "";
-  const poolSuffix = poolId ? `:pool:${String(poolId).slice(0, 32)}` : "";
-  if (connectionId) return `opencode:conn:${String(connectionId).slice(0, 128)}${poolSuffix}`;
+  if (connectionId) return `opencode:conn:${String(connectionId).slice(0, 128)}`;
   const raw = credentials?.rawHeaders || {};
   const auth = raw.authorization || raw.Authorization || raw["x-api-key"] || raw["X-Api-Key"] || "";
   if (auth) {
     const digest = crypto.createHash("sha256").update(String(auth)).digest("hex").slice(0, 32);
-    return `opencode:auth:${digest}${poolSuffix}`;
+    return `opencode:auth:${digest}`;
   }
-  return `opencode:default${poolSuffix}`;
-}
-
-export function clearOpencodeSessionCache() {
-  stableOpencodeSessions.clear();
-}
-
-/** Clear only the sessions bound to a given proxy pool id, so rotation after a
- * 429 does not keep reusing the exhausted session id on the next pool. */
-export function clearOpencodeSessionByPool(poolId) {
-  if (!poolId) return;
-  const suffix = `:pool:${String(poolId).slice(0, 32)}`;
-  for (const key of stableOpencodeSessions.keys()) {
-    if (key.endsWith(suffix)) stableOpencodeSessions.delete(key);
-  }
+  return "opencode:default";
 }
 
 export function stableSessionId(credentials) {
@@ -381,16 +365,6 @@ function normalizeOpencodeReasoning(model, body) {
   delete body.reasoning_effort;
 }
 
-// Chat Completions lane: the free backend validates reasoning_effort against the
-// plain OpenAI enum (none|minimal|low|medium|high|xhigh|max) and answers 400
-// "Invalid option" for anything else — including "auto", which adaptive thinking
-// (Claude Code's thinking:{type:"adaptive"}) arrives as. Omitting the field lets
-// the upstream pick its own default, which is what adaptive means; same rationale
-// as the Responses path above, which rejects "unknown variant `auto`".
-function dropAdaptiveReasoningEffort(body) {
-  if (body?.reasoning_effort === "auto") delete body.reasoning_effort;
-}
-
 export class OpenCodeExecutor extends BaseExecutor {
   constructor() {
     super("opencode", PROVIDERS.opencode);
@@ -440,7 +414,6 @@ export class OpenCodeExecutor extends BaseExecutor {
       // non-empty tool arrays; skipping cloaking here triggers 403 FreeTierError.
       applyFingerprintTools(body, true);
     } else if (body && typeof body === "object") {
-      dropAdaptiveReasoningEffort(body);
       applyFingerprintTools(body, false);
     }
     return injectReasoningContent({ provider: this.provider, model, body });
@@ -456,24 +429,34 @@ export class OpenCodeExecutor extends BaseExecutor {
       connectionProxyUrl: proxyOptions?.connectionProxyUrl || channelRoute,
     };
     const opencodeBin = findOpencodeBinary();
-    if (!opencodeBin) {
-      throw new Error("OpenCode CLI engine not found; CLI wrapper is required (network fallback disabled)");
+    const hasClientTools = Array.isArray(body?.tools) && body.tools.length > 0;
+    if (opencodeBin && !hasClientTools) {
+      try {
+        const rawModel = baseModelId(model || body?.model);
+        const targetModel = `opencode/${rawModel}`;
+        const promptText = formatOpencodeCliPrompt(body);
+
+        if (promptText) {
+          return await executeOpencodeCli({
+            opencodeBin,
+            targetModel,
+            promptText,
+            proxyOptions: effectiveProxyOptions,
+            signal,
+            log,
+            rawModel,
+            providerTag: "OPENCODE",
+          });
+        }
+      } catch (err) {
+        log?.warn?.("OPENCODE", `CLI engine spawn failed, falling back to network wire: ${err.message}`);
+      }
     }
-    const rawModel = baseModelId(model || body?.model);
-    const targetModel = `opencode/${rawModel}`;
-    const promptText = formatOpencodeCliPrompt(body);
-    if (!promptText) {
-      throw new Error("OpenCode CLI engine could not format a prompt; CLI wrapper is required (network fallback disabled)");
-    }
-    return executeOpencodeCli({
-      opencodeBin,
-      targetModel,
-      promptText,
+
+    return super.execute({
+      ...args,
       proxyOptions: effectiveProxyOptions,
-      signal,
-      log,
-      rawModel,
-      providerTag: "OPENCODE",
+      credentials: this.prepareRequestCredentials(args),
     });
   }
 

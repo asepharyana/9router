@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import PropTypes from "prop-types";
 import {
   Card,
   CardSkeleton,
@@ -111,6 +112,7 @@ export default function ProvidersPage() {
   const [testingMode, setTestingMode] = useState(null);
   const [testResults, setTestResults] = useState(null);
   const [statusFilter, setStatusFilter] = useState("all");
+  const [opencodeInstalled, setOpencodeInstalled] = useState(true);
   const notify = useNotificationStore();
   const searchQuery = useHeaderSearchStore((s) => s.query);
   const registerSearch = useHeaderSearchStore((s) => s.register);
@@ -162,8 +164,12 @@ export default function ProvidersPage() {
         ]);
         const connectionsData = await connectionsRes.json();
         const nodesData = await nodesRes.json();
-        if (connectionsRes.ok)
+        if (connectionsRes.ok) {
           setConnections(connectionsData.connections || []);
+          if (connectionsData.opencodeInstalled !== undefined) {
+            setOpencodeInstalled(Boolean(connectionsData.opencodeInstalled));
+          }
+        }
         if (nodesRes.ok) setProviderNodes(nodesData.nodes || []);
       } catch (error) {
         console.log("Error fetching data:", error);
@@ -412,7 +418,6 @@ export default function ProvidersPage() {
     freeTierEntries.length > 0 ||
     webCookieEntries.length > 0 ||
     apikeyEntries.length > 0 ||
-    webCookieEntries.length > 0 ||
     compatibleProviders.length > 0 ||
     anthropicCompatibleProviders.length > 0;
 
@@ -590,6 +595,7 @@ export default function ProvidersPage() {
                 provider={info}
                 stats={getProviderStats(key, freeAuthTypes)}
                 authType="free"
+                opencodeInstalled={opencodeInstalled}
                 onToggle={(active) =>
                   handleToggleProvider(key, freeAuthTypes, active)
                 }
@@ -673,16 +679,6 @@ export default function ProvidersPage() {
               onToggle={(active) => handleToggleProvider(key, "apikey", active)}
             />
           ))}
-          {webCookieEntries.map(([key, info]) => (
-            <ApiKeyProviderCard
-              key={key}
-              providerId={key}
-              provider={info}
-              stats={getProviderStats(key, "cookie")}
-              authType="cookie"
-              onToggle={(active) => handleToggleProvider(key, "cookie", active)}
-            />
-          ))}
         </div>
         {!isApikeySearching && !showAllApikey && hiddenApikeyCount > 0 && (
           <button
@@ -758,25 +754,7 @@ export default function ProvidersPage() {
   );
 }
 
-interface ProviderCardProps {
-  providerId: string
-  provider: {
-    id: string
-    name: string
-    color?: string
-    textIcon?: string
-  }
-  stats: {
-    connected?: number
-    error?: number
-    errorCode?: string
-    errorTime?: string
-  }
-  authType?: string
-  onToggle?(...args: unknown[]): unknown
-}
-
-function ProviderCard({ providerId, provider, stats, authType, onToggle }: ProviderCardProps) {
+function ProviderCard({ providerId, provider, stats, authType, onToggle, opencodeInstalled = true }) {
   const { connected, error, errorCode, errorTime, allDisabled } = stats;
   const isNoAuth = !!provider.noAuth;
 
@@ -832,11 +810,17 @@ function ProviderCard({ providerId, provider, stats, authType, onToggle }: Provi
                   </Badge>
                 ) : isNoAuth ? (
                   <Badge
-                    variant={provider.statusBadge?.variant || "success"}
+                    variant={
+                      providerId === "opencode-v2" && !opencodeInstalled
+                        ? "warning"
+                        : provider.statusBadge?.variant || "success"
+                    }
                     size="sm"
                     dot
                   >
-                    {provider.statusBadge?.label || "Ready"}
+                    {providerId === "opencode-v2" && !opencodeInstalled
+                      ? "Need Configuration"
+                      : provider.statusBadge?.label || "Ready"}
                   </Badge>
                 ) : (
                   <>
@@ -874,24 +858,23 @@ function ProviderCard({ providerId, provider, stats, authType, onToggle }: Provi
   );
 }
 
-interface ApiKeyProviderCardProps {
-  providerId: string
-  provider: {
-    id: string
-    name: string
-    color?: string
-    textIcon?: string
-    apiType?: string
-  }
-  stats: {
-    connected?: number
-    error?: number
-    errorCode?: string
-    errorTime?: string
-  }
-  authType?: string
-  onToggle?(...args: unknown[]): unknown
-}
+ProviderCard.propTypes = {
+  providerId: PropTypes.string.isRequired,
+  provider: PropTypes.shape({
+    id: PropTypes.string.isRequired,
+    name: PropTypes.string.isRequired,
+    color: PropTypes.string,
+    textIcon: PropTypes.string,
+  }).isRequired,
+  stats: PropTypes.shape({
+    connected: PropTypes.number,
+    error: PropTypes.number,
+    errorCode: PropTypes.string,
+    errorTime: PropTypes.string,
+  }).isRequired,
+  authType: PropTypes.string,
+  onToggle: PropTypes.func,
+};
 
 function ApiKeyProviderCard({
   providerId,
@@ -899,7 +882,7 @@ function ApiKeyProviderCard({
   stats,
   authType,
   onToggle,
-}: ApiKeyProviderCardProps) {
+}) {
   const { connected, error, errorCode, errorTime, allDisabled } = stats;
   const isCompatible = providerId.startsWith(OPENAI_COMPATIBLE_PREFIX);
   const isAnthropicCompatible = providerId.startsWith(
@@ -1017,20 +1000,26 @@ function ApiKeyProviderCard({
   );
 }
 
-interface ProviderTestResultsViewProps {
-  results: {
-    mode?: string
-    results?: unknown[]
-    summary?: {
-      total?: number
-      passed?: number
-      failed?: number
-    }
-    error?: string
-  }
-}
+ApiKeyProviderCard.propTypes = {
+  providerId: PropTypes.string.isRequired,
+  provider: PropTypes.shape({
+    id: PropTypes.string.isRequired,
+    name: PropTypes.string.isRequired,
+    color: PropTypes.string,
+    textIcon: PropTypes.string,
+    apiType: PropTypes.string,
+  }).isRequired,
+  stats: PropTypes.shape({
+    connected: PropTypes.number,
+    error: PropTypes.number,
+    errorCode: PropTypes.string,
+    errorTime: PropTypes.string,
+  }).isRequired,
+  authType: PropTypes.string,
+  onToggle: PropTypes.func,
+};
 
-function ProviderTestResultsView({ results }: ProviderTestResultsViewProps) {
+function ProviderTestResultsView({ results }) {
   if (results.error && !results.results) {
     return (
       <div className="text-center py-6">
@@ -1114,3 +1103,15 @@ function ProviderTestResultsView({ results }: ProviderTestResultsViewProps) {
   );
 }
 
+ProviderTestResultsView.propTypes = {
+  results: PropTypes.shape({
+    mode: PropTypes.string,
+    results: PropTypes.array,
+    summary: PropTypes.shape({
+      total: PropTypes.number,
+      passed: PropTypes.number,
+      failed: PropTypes.number,
+    }),
+    error: PropTypes.string,
+  }).isRequired,
+};

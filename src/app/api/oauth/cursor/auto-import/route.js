@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { access, constants } from "fs/promises";
+
+export const dynamic = "force-dynamic";
 import { homedir } from "os";
 import { join } from "path";
 import { execFile } from "child_process";
@@ -76,9 +78,9 @@ const normalize = (value) => {
  * Extract tokens via better-sqlite3 (bundled dependency).
  * This is the preferred strategy - no external CLI required.
  */
-async function extractTokensViaBetterSqlite(dbPath) {
-  const mod = await import("better-sqlite3");
-  const Database = mod.default || mod;
+function extractTokensViaBetterSqlite(dbPath) {
+  // Dynamic require so the route stays importable even if native bindings fail
+  const Database = require("better-sqlite3");
   const db = new Database(dbPath, { readonly: true, fileMustExist: true });
 
   const query = (key) => {
@@ -219,7 +221,7 @@ export async function GET() {
 
     // Strategy 1: better-sqlite3 (bundled - no external tools required)
     try {
-      const tokens = await extractTokensViaBetterSqlite(dbPath);
+      const tokens = extractTokensViaBetterSqlite(dbPath);
       if (tokens.accessToken && tokens.machineId) {
         return NextResponse.json({
           found: true,

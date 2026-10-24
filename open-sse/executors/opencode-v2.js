@@ -370,25 +370,36 @@ export class OpenCodeV2Executor extends BaseExecutor {
       connectionProxyUrl: proxyOptions?.connectionProxyUrl || resolveV2ChannelRoute(),
     };
 
+    // Check if official OpenCode CLI engine is available on system
     const opencodeBin = findOpencodeBinary();
-    if (!opencodeBin) {
-      throw new Error("OpenCode CLI engine not found; CLI wrapper is required (network fallback disabled)");
+    const hasClientTools = Array.isArray(body?.tools) && body.tools.length > 0;
+    if (opencodeBin && !hasClientTools) {
+      try {
+        const rawModel = baseModelId(model || body?.model);
+        const targetModel = `opencode/${rawModel}`;
+        const promptText = formatOpencodeCliPrompt(body);
+
+        if (promptText) {
+          return await executeOpencodeCli({
+            opencodeBin,
+            targetModel,
+            promptText,
+            proxyOptions: effectiveProxyOptions,
+            signal,
+            log,
+            rawModel,
+            providerTag: "OPENCODE-V2",
+          });
+        }
+      } catch (err) {
+        log?.warn?.("OPENCODE-V2", `CLI engine spawn failed, falling back to network wire: ${err.message}`);
+      }
     }
-    const rawModel = baseModelId(model || body?.model);
-    const targetModel = `opencode/${rawModel}`;
-    const promptText = formatOpencodeCliPrompt(body);
-    if (!promptText) {
-      throw new Error("OpenCode CLI engine could not format a prompt; CLI wrapper is required (network fallback disabled)");
-    }
-    return executeOpencodeCli({
-      opencodeBin,
-      targetModel,
-      promptText,
+
+    return super.execute({
+      ...args,
       proxyOptions: effectiveProxyOptions,
-      signal,
-      log,
-      rawModel,
-      providerTag: "OPENCODE-V2",
+      credentials: this.prepareRequestCredentials(args),
     });
   }
 

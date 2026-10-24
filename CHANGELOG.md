@@ -1,3 +1,78 @@
+# v0.5.305 (2026-10-24) · 2 commits
+
+## What Was Changed
+
+- **Smart Tool-Aware Execution for OpenCode V1 and V2:**
+  - Route tool-bearing client requests (such as DeepSeek Harness, Cline, or Roo Code with tools/functions) directly to the wire HTTP executor rather than the CLI runner. The OpenCode CLI non-interactive mode only handles text prompt evaluation, so requests with client tools must preserve tool definitions via the wire HTTP protocol.
+  - Fail open when CLI produces no output instead of yielding an empty stream with `finish_reason: "error"` and zero output tokens.
+
+---
+
+# v0.5.304 (2026-10-24) · 2 commits
+
+## What Was Changed
+
+- **OpenCode CLI Auto-Retry on Proxy Tunnel Drops:**
+  - Added multi-attempt retry with rotating residential proxy sessions inside `executeOpencodeCli` to handle occasional proxy tunnel 400/502 rejections from residential broadband nodes.
+  - Ensured CLI subprocess cleanly bubbles up errors to the standard executor fallback chain instead of emitting premature empty `finish_reason: error` chunks with zero output tokens.
+
+---
+
+# v0.5.303 (2026-10-24) · 2 commits
+
+## What Was Changed
+
+- **Fix 'chatSettings' TDZ Crash in Chat Handler:**
+  - Resolved `ReferenceError: Cannot access 'chatSettings' before initialization` in `src/sse/handlers/chat.js` by hoisting `getSettings()` before the account evaluation loop so authentication and error-handling code paths execute cleanly.
+- **OpenCode Free V1 Channel Routing & Timeout Parity:**
+  - Added default fallback to the dedicated residential channel route for OpenCode Free V1 (`opencode`) in `src/sse/services/auth.js` and `open-sse/executors/opencode.js`, eliminating 403 FreeTierError rejections on unconfigured/direct host egress.
+  - Increased OpenCode V1 transport timeout to 45s to prevent premature proxy connection drops.
+
+---
+
+# v0.5.302 (2026-10-24) · 2 commits
+
+## What Was Changed
+
+- **Rescue Zero-Output Responses and Fold Reasoning Tokens:**
+  - Rescued empty response completions in streaming and non-streaming modes when models exhaust token budgets on reasoning (e.g. DeepSeek/Claude with thinking enabled) by promoting reasoning output to content before stream close.
+  - Folded `reasoning_tokens` into `completion_tokens` when upstream providers report `completion_tokens: 0`, preventing clients like Cherry Studio and NextChat from throwing "The model reported success but generated zero output tokens (out 0)".
+  - Added helpful status fallback text when a model produces zero tokens due to length limits or content filter truncation instead of returning an empty body.
+
+---
+
+# v0.5.301 (2026-10-24) · 2 commits
+
+## What Was Changed
+
+- **Windows CLI Binary Resolution & Process Spawn Fix:**
+  - Fixed Windows `spawn ENOENT` when launching `opencode` on Windows hosts (e.g. `G:\9router
+ode_modules\.bin\opencode`).
+  - Prioritized Windows executable extensions (`.cmd`, `.exe`, `.bat`) over extensionless shell scripts in `findOpencodeBinary`.
+  - Added `shell: true` and `windowsHide: true` to `child_process.spawn` options on Windows so batch scripts execute seamlessly.
+
+---
+
+# v0.5.300 (2026-10-24) · 2 commits
+
+## What Was Changed
+
+- **Fix Erroneous FREE Badge on Non-Free Models in OpenCode V1 and V2:**
+  - Removed hardcoded `isFree={isOpenCode ? true : model.isFree}` flag which falsely marked non-free models (e.g., Claude, GPT) as Free when added to Available Models.
+  - Aligned custom and display model tier status with upstream suggested catalogue `isFree` metadata and pattern classification so paid models correctly display without the FREE badge.
+
+---
+
+# v0.5.299 (2026-10-24) · 2 commits
+
+## What Was Changed
+
+- **OpenCode CLI Binary Detection & 'Need Configuration' Status:**
+  - Added real-time binary detection for OpenCode CLI across host PATH, global bin, and local node_modules.
+  - When the OpenCode binary is not installed on the host running 9Router seren, OpenCode Free V2 displays a 'Need Configuration' warning badge and instructs the user to install the binary manually (`npm install -g opencode-ai` or curl script).
+
+---
+
 # v0.5.298 (2026-10-24) · 2 commits
 
 ## What Was Changed

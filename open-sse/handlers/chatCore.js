@@ -20,6 +20,7 @@ import { handleForcedSSEToJson } from "./chatCore/sseToJsonHandler.js";
 import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import {
   isEventStreamResponse,
+  looksLikeSseText,
   isChatCompletionBody,
   readJsonBody,
   jsonResponseFromBody,
@@ -709,10 +710,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // `stream` so the flag never left). Piping that body through the SSE parser
   // emits zero frames - the client hangs on an empty stream and usage bills 0
   // tokens - so branch on what actually arrived, not on what we asked for.
-  if (stream && !isEventStreamResponse(providerResponse)) {
-    const rawUpstreamText = providerResponse && typeof providerResponse.clone === "function"
-      ? await providerResponse.clone().text().catch(() => "")
-      : "";
+  const rawUpstreamText = providerResponse && typeof providerResponse.clone === "function"
+    ? await providerResponse.clone().text().catch(() => "")
+    : "";
+  if (stream && !isEventStreamResponse(providerResponse) && !looksLikeSseText(rawUpstreamText)) {
     const mismatchedBody = await readJsonBody(providerResponse);
     if (mismatchedBody === null) {
       // Nothing readable came back and the client never asked for a stream, so it

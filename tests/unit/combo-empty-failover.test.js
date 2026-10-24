@@ -8,6 +8,7 @@ import {
   peekStreamForContent,
   reconstructStream,
 } from "../../open-sse/services/emptyFailover.js";
+import { looksLikeSseText } from "../../open-sse/transformer/jsonToStreamConverter.js";
 import { pipeWithDisconnect } from "../../open-sse/utils/streamHandler.js";
 import { NO_RETRY_EMPTY_FINISH } from "../../open-sse/translator/schema/finishReasons.js";
 
@@ -86,6 +87,14 @@ describe("isNoRetryFinish", () => {
   it("stop → retry (false)", () => expect(isNoRetryFinish("stop")).toBe(false));
   it("null → false", () => expect(isNoRetryFinish(null)).toBe(false));
   it("schema set holds content_filter", () => expect(NO_RETRY_EMPTY_FINISH.has("content_filter")).toBe(true));
+});
+
+describe("SSE sniffing for Codex-style streams", () => {
+  it("recognizes event: response.created payloads even without a content-type header", () => {
+    const payload = `event: response.created\ndata: {"type":"response.created","response":{"status":"in_progress"}}\n\n`;
+    expect(looksLikeSseText(payload)).toBe(true);
+    expect(looksLikeSseText('{"error":"bad"}')).toBe(false);
+  });
 });
 
 describe("combo fallback handles locked streams", () => {

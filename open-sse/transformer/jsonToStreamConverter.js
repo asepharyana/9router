@@ -13,6 +13,12 @@ export function contentTypeOf(response) {
   return String(response?.headers?.get("content-type") || "").toLowerCase();
 }
 
+export function looksLikeSseText(rawText) {
+  const text = String(rawText || "").trimStart();
+  if (!text) return false;
+  return /^event:|^data:|^\s*event:|^\s*data:/m.test(text);
+}
+
 export function isEventStreamResponse(response) {
   return contentTypeOf(response).includes(SSE_CONTENT_TYPE_EVENT_STREAM);
 }

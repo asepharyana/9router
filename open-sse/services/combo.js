@@ -30,6 +30,11 @@ async function peekComboResponse(result, log) {
   return { outcome: peeked.outcome, finishReason: peeked.finishReason, timedOut: peeked.timedOut, response };
 }
 
+function isLockedStreamError(error) {
+  const msg = String(error?.message || error || "");
+  return /ReadableStream is locked|Invalid state: The ReadableStream is locked|stream.*locked/i.test(msg);
+}
+
 // Hard capabilities = input modalities; missing one drops request data (e.g. image
 // stripped). Must be prioritized. Soft (e.g. search) only degrades a feature.
 const HARD_CAPS = new Set(["vision", "pdf", "audioInput", "videoInput", "tools"]);
@@ -609,12 +614,18 @@ export async function handleComboChat({
       log.warn("COMBO", `Model ${modelStr} failed, trying next`, { status: result.status });
       await drainResponse(result);
     } catch (error) {
-      // Catch unexpected exceptions to ensure fallback continues
+      // Catch unexpected exceptions to ensure fallback continues. Stream-lock
+      // races are retryable: the candidate already consumed/locked its body and
+      // the next model is allowed to try. Do not treat this as a terminal model error.
       if (comboStrategy === "smart" && sessionId && modelStr === activeStickyModel) {
         clearStickyComboSession(comboName, sessionId);
       }
-      lastError = error.message || String(error);
+      lastError = error?.message || String(error);
       if (!lastStatus) lastStatus = 500;
+      if (isLockedStreamError(error)) {
+        log.warn("COMBO", `Model ${modelStr} stream was already locked, trying next`, { error: lastError });
+        continue;
+      }
       log.warn("COMBO", `Model ${modelStr} threw error, trying next`, { error: lastError });
     }
   }

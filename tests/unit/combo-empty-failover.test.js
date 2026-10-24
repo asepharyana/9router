@@ -87,6 +87,32 @@ describe("isNoRetryFinish", () => {
   it("schema set holds content_filter", () => expect(NO_RETRY_EMPTY_FINISH.has("content_filter")).toBe(true));
 });
 
+describe("combo fallback handles locked streams", () => {
+  it("skips a locked-stream model and tries the next one", async () => {
+    const { handleComboChat } = await import("../../open-sse/services/combo.js");
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), line: vi.fn(), errorLine: vi.fn() };
+    const tried = [];
+    const res = await handleComboChat({
+      body: { messages: [{ role: "user", content: "hi" }] },
+      models: ["openai/m0", "openai/m1"],
+      handleSingleModel: async (_body, model) => {
+        tried.push(model);
+        if (model === "openai/m0") {
+          throw new TypeError("Invalid state: The ReadableStream is locked");
+        }
+        return new Response("ok", { status: 200, headers: { "Content-Type": "text/plain" } });
+      },
+      log,
+      comboName: "locked-stream-regression",
+      comboStrategy: "fallback",
+    });
+
+    expect(tried).toEqual(["openai/m0", "openai/m1"]);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok");
+  });
+});
+
 describe("peekStreamForContent", () => {
   it("MALFORMED-style empty stream → outcome empty, finish stop", async () => {
     const p = await peekStreamForContent(sseStream([ROLE, EMPTY_STOP, DONE]));

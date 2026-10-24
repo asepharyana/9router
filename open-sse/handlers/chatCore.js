@@ -75,6 +75,16 @@ export function stripContinuityFields(body) {
   return body;
 }
 
+async function logInvalidCodexUpstream({ provider, model, providerResponse, rawText, statusCode, reqTag, log }) {
+  if (provider !== "codex") return;
+  const contentType = providerResponse?.headers?.get?.("content-type") || "unknown";
+  const text = String(rawText || "").replace(/\s+/g, " ").trim();
+  const snippet = text ? text.slice(0, 1200) : "<empty>";
+  const msg = `codex upstream invalid JSON | status=${statusCode} | content-type=${contentType} | snippet=${snippet}`;
+  console.error(`[${reqTag || "codex"}] ${msg}`);
+  log?.errorLine?.(reqTag, "✗", `UPSTREAM BAD_GATEWAY · ${provider}/${model} · invalid JSON response\n    status=${statusCode}\n    content-type=${contentType}\n    snippet=${snippet}`);
+}
+
 export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, contextPruningEnabled, maxMessagesLimit, semanticCacheEnabled, semanticCacheTtlHours, semanticCacheMaxEntries, contextPruningLevel, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, requestedModel, toolCallFallbackEnabled = true, providerOverrides, modelMultipliers = null, isAntiProbe = false, hideError = false, customPromptEnabled = false, customPrompt = "", clientSignal = null }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
@@ -700,11 +710,15 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // emits zero frames - the client hangs on an empty stream and usage bills 0
   // tokens - so branch on what actually arrived, not on what we asked for.
   if (stream && !isEventStreamResponse(providerResponse)) {
+    const rawUpstreamText = providerResponse && typeof providerResponse.clone === "function"
+      ? await providerResponse.clone().text().catch(() => "")
+      : "";
     const mismatchedBody = await readJsonBody(providerResponse);
     if (mismatchedBody === null) {
       // Nothing readable came back and the client never asked for a stream, so it
       // gets a clean gateway error instead of a response with no body to parse.
       if (!clientRequestedStreaming) {
+        await logInvalidCodexUpstream({ provider, model, providerResponse, rawText: rawUpstreamText, statusCode: providerResponse?.status || HTTP_STATUS.BAD_GATEWAY, reqTag, log });
         appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
         streamController.handleComplete();
         return createErrorResult(HTTP_STATUS.BAD_GATEWAY, `Invalid JSON response from ${provider}`);

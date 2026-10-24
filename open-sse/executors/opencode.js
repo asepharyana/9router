@@ -456,33 +456,24 @@ export class OpenCodeExecutor extends BaseExecutor {
       connectionProxyUrl: proxyOptions?.connectionProxyUrl || channelRoute,
     };
     const opencodeBin = findOpencodeBinary();
-    if (opencodeBin) {
-      try {
-        const rawModel = baseModelId(model || body?.model);
-        const targetModel = `opencode/${rawModel}`;
-        const promptText = formatOpencodeCliPrompt(body);
-
-        if (promptText) {
-          return executeOpencodeCli({
-            opencodeBin,
-            targetModel,
-            promptText,
-            proxyOptions: effectiveProxyOptions,
-            signal,
-            log,
-            rawModel,
-            providerTag: "OPENCODE",
-          });
-        }
-      } catch (err) {
-        log?.warn?.("OPENCODE", `CLI engine spawn failed, falling back to network wire: ${err.message}`);
-      }
+    if (!opencodeBin) {
+      throw new Error("OpenCode CLI engine not found; CLI wrapper is required (network fallback disabled)");
     }
-
-    return super.execute({
-      ...args,
+    const rawModel = baseModelId(model || body?.model);
+    const targetModel = `opencode/${rawModel}`;
+    const promptText = formatOpencodeCliPrompt(body);
+    if (!promptText) {
+      throw new Error("OpenCode CLI engine could not format a prompt; CLI wrapper is required (network fallback disabled)");
+    }
+    return executeOpencodeCli({
+      opencodeBin,
+      targetModel,
+      promptText,
       proxyOptions: effectiveProxyOptions,
-      credentials: this.prepareRequestCredentials(args),
+      signal,
+      log,
+      rawModel,
+      providerTag: "OPENCODE",
     });
   }
 

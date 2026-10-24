@@ -494,6 +494,24 @@ export async function handleComboChat({
   let lastStatus = null;
   let requestScopedResult = null;
 
+  // Read and discard a response body so the underlying stream is fully released
+  // before we move on to the next combo member. Prevents "ReadableStream is
+  // locked" when a later member reuses the same buffer or the caller retries.
+  async function drainResponse(result) {
+    try {
+      if (result && result.body && !result.body.locked) {
+        const reader = result.body.getReader();
+        while (true) {
+          const { done } = await reader.read();
+          if (done) break;
+        }
+        reader.releaseLock();
+      }
+    } catch {
+      // fail open: an undrained body is harmless for fallback
+    }
+  }
+
   for (let i = 0; i < rotatedModels.length; i++) {
     const modelStr = rotatedModels[i];
     log.info("COMBO", `Trying model ${i + 1}/${rotatedModels.length}: ${modelStr}`);
@@ -510,16 +528,18 @@ export async function handleComboChat({
         if (!isLastModel) {
           const contentType = result.headers?.get?.("content-type") || "";
           if (contentType.includes("application/json")) {
+            let peekBody = null;
             try {
-              const peekBody = await result.clone().json();
-              if (isZeroContentResponse(peekBody)) {
-                log.warn("COMBO", `Model ${modelStr} returned HTTP 200 with zero usable content, falling back to next model`);
-                lastError = "Zero usable content";
-                lastStatus = 200;
-                continue;
-              }
+              peekBody = await result.clone().json();
             } catch {
-              // Ignore JSON parse errors
+              // Ignore JSON parse errors (incl. a locked/disturbed body)
+            }
+            if (peekBody && isZeroContentResponse(peekBody)) {
+              log.warn("COMBO", `Model ${modelStr} returned HTTP 200 with zero usable content, falling back to next model`);
+              lastError = "Zero usable content";
+              lastStatus = 200;
+              await drainResponse(result);
+              continue;
             }
           }
         }
@@ -536,7 +556,7 @@ export async function handleComboChat({
         errorText = errorBody?.error?.message || errorBody?.error || errorBody?.message || errorText;
         retryAfter = errorBody?.retryAfter || null;
       } catch {
-        // Ignore JSON parse errors
+        // Ignore JSON parse errors (incl. a locked/disturbed body)
       }
 
       // Track earliest retryAfter across all combo models
@@ -570,6 +590,7 @@ export async function handleComboChat({
         lastError = errorText || String(result.status);
         if (!lastStatus) lastStatus = result.status;
         if (!requestScopedResult) requestScopedResult = result;
+        await drainResponse(result);
         continue;
       }
 
@@ -582,10 +603,11 @@ export async function handleComboChat({
         await new Promise(r => setTimeout(r, cooldownMs));
       }
 
-      // Fallback to next model
+      // Fallback to next model: release the failed member's stream before moving on.
       lastError = errorText || String(result.status);
       if (!lastStatus) lastStatus = result.status;
       log.warn("COMBO", `Model ${modelStr} failed, trying next`, { status: result.status });
+      await drainResponse(result);
     } catch (error) {
       // Catch unexpected exceptions to ensure fallback continues
       if (comboStrategy === "smart" && sessionId && modelStr === activeStickyModel) {

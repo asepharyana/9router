@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(request, context) {
   try {
-    const id = context?.params?.id;
+    const id = (await context?.params)?.id;
     if (!id) {
       return NextResponse.json({ error: "Missing request id" }, { status: 400 });
     }

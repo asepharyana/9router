@@ -12,7 +12,7 @@ function isCliRequest(request) {
 
 export async function GET(request, context) {
   try {
-    const jobId = context?.params?.jobId;
+    const jobId = (await context?.params)?.jobId;
     if (!jobId) {
       return NextResponse.json({ error: "Missing job id" }, { status: 400 });
     }

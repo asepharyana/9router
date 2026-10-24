@@ -82,6 +82,22 @@ export function copyStandaloneAssets({ projectRoot = process.cwd(), distDir = pr
     cpSync(nextPackageSource, nextPackageDestination, { recursive: true, force: true });
     console.log(`[standalone-assets] Mirrored the next package to ${nextPackageDestination}`);
   }
+
+  // `sharp` is a runtime dependency for the image-text extractor and native
+  // image metadata helpers. The standalone server does not keep the full app's
+  // node_modules tree by default, so the generated server chunk can fail with a
+  // missing external module like `sharp-<hash>`. Mirror the runtime image stack
+  // alongside the full Next package so the server can execute without a custom
+  // install step.
+  for (const runtimeModule of ["sharp", "@img", "detect-libc"]) {
+    const moduleSource = resolve(projectRoot, "node_modules", runtimeModule);
+    const moduleDestination = resolve(standaloneDir, "node_modules", runtimeModule);
+    if (existsSync(moduleSource)) {
+      rmSync(moduleDestination, { recursive: true, force: true });
+      cpSync(moduleSource, moduleDestination, { recursive: true, force: true });
+      console.log(`[standalone-assets] Mirrored ${runtimeModule} to ${moduleDestination}`);
+    }
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(dirname(fileURLToPath(import.meta.url)), "copy-standalone-assets.mjs")) {

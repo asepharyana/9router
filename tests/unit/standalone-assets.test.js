@@ -86,6 +86,22 @@ describe("standalone build assets", () => {
       .toThrow();
   });
 
+  it("mirrors sharp and its native image modules into the standalone bundle", () => {
+    const projectRoot = createBuildFixture(".next");
+    mkdirSync(join(projectRoot, "node_modules", "sharp"), { recursive: true });
+    writeFileSync(join(projectRoot, "node_modules", "sharp", "package.json"), '{"name":"sharp"}');
+    mkdirSync(join(projectRoot, "node_modules", "@img", "sharp-linux-x64"), { recursive: true });
+    writeFileSync(join(projectRoot, "node_modules", "@img", "sharp-linux-x64", "package.json"), '{"name":"@img/sharp-linux-x64"}');
+    mkdirSync(join(projectRoot, "node_modules", "detect-libc"), { recursive: true });
+    writeFileSync(join(projectRoot, "node_modules", "detect-libc", "package.json"), '{"name":"detect-libc"}');
+
+    copyStandaloneAssets({ projectRoot, distDir: ".next" });
+
+    expect(readFileSync(join(projectRoot, ".next", "standalone", "node_modules", "sharp", "package.json"), "utf8")).toContain('"name":"sharp"');
+    expect(readFileSync(join(projectRoot, ".next", "standalone", "node_modules", "@img", "sharp-linux-x64", "package.json"), "utf8")).toContain('"name":"@img/sharp-linux-x64"');
+    expect(readFileSync(join(projectRoot, ".next", "standalone", "node_modules", "detect-libc", "package.json"), "utf8")).toContain('"name":"detect-libc"');
+  });
+
   it("does not modify workspace-traced CLI builds", () => {
     const projectRoot = createBuildFixture(".next-cli-build");
     const previousMode = process.env.NEXT_TRACING_ROOT_MODE;
